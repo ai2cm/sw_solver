@@ -7,6 +7,7 @@
 ## Run
 
 `make enter`
+
 `python driver.py`
 
 ## Visualize
