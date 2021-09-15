@@ -2,16 +2,22 @@
 
 ## Build
 
-`make build`
+```bash
+make build
+```
 
 ## Run
 
-`make enter`
+```bash
+make enter
+python driver.py
+```
 
-`python driver.py`
 
 ## Visualize
 
-`python animation.py`
+```bash
+python animation.py
+```
 
 Open up the `*.mpg` file in the data directory to view the MPEG visualization.
