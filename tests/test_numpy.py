@@ -21,11 +21,11 @@ def test_numpy():
 
     # Simulation length (in days); better to use integer values.
     # Suggested simulation length for Williamson's test cases:
-    T = 1
+    T = 2
 
     # Grid dimensions
-    M = 20
-    N = 20
+    M = 10
+    N = 10
 
     # CFL number
     CFL = 0.5
