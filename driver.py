@@ -4,9 +4,7 @@ Driver for running NumPy implementation of a finite difference
 solver for Shallow Water Equations on a Sphere (SWES).
 """
 
-import os
 import pickle
-import math
 
 # --- SETTINGS --- #
 
@@ -17,7 +15,7 @@ version = 'numpy'
 
 # Import
 if (version == 'numpy'):
-    import swes_numpy as SWES
+    import sw_solver.numpy as SWES
 
 # Initial condition:
 #	* 0: sixth test case of Williamson's suite
