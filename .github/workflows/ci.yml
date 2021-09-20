@@ -1,0 +1,30 @@
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Python 3
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+      - uses: actions/cache@v2
+        id: cache-venv  # name for referring later
+        with:
+          path: ./.venv/  # what we cache: the virtualenv
+          # The cache key depends on setup.cfg
+          key: ${{ runner.os }}-venv-${{ hashFiles('**/setup.cfg') }}
+          restore-keys: |
+            ${{ runner.os }}-venv-
+      # Build a virtualenv, but only if it doesn't already exist
+      - name: Build virtual environment
+        run: |
+          python -m venv ./.venv
+          . ./.venv/bin/activate
+          python -m pip install -u pip wheel setuptools
+          python -m pip install -r constraints.txt
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+      - name: Run tests with pytest
+        run: |
+          pip install -e ./
+          pytest tests/
