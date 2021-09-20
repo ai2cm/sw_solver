@@ -26,5 +26,6 @@ jobs:
         if: steps.cache-venv.outputs.cache-hit != 'true'
       - name: Run tests with pytest
         run: |
+          . ./.venv/bin/activate
           pip install -e ./
           pytest tests/
