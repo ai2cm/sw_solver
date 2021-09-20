@@ -9,17 +9,17 @@ import pickle
 # --- SETTINGS --- #
 
 # Solver version:
-#	* numpy (NumPy version)
+# 	* numpy (NumPy version)
 #   * gt4py (DSL version)
-version = 'numpy'
+version = "numpy"
 
 # Import
-if (version == 'numpy'):
+if version == "numpy":
     import sw_solver.numpy as SWES
 
 # Initial condition:
-#	* 0: sixth test case of Williamson's suite
-#	* 1: second test case of Williamson's suite
+# 	* 0: sixth test case of Williamson's suite
+# 	* 1: second test case of Williamson's suite
 IC = 0
 
 # Simulation length (in days); better to use integer values.
@@ -34,36 +34,43 @@ N = 90
 CFL = 0.5
 
 # Various solver settings:
-#	* diffusion: take diffusion into account
+# 	* diffusion: take diffusion into account
 diffusion = True
 
 # Output settings:
-#	* verbose: 	specify number of iterations between two consecutive output
-#	* save:		specify number of iterations between two consecutive stored timesteps
+# 	* verbose: 	specify number of iterations between two consecutive output
+# 	* save:		specify number of iterations between two consecutive stored timesteps
 verbose = 500
 save = 500
 
 # --- RUN THE SOLVER --- #
 
 pb = SWES.Solver(T, M, N, IC, CFL, diffusion)
-if (save > 0):
+if save > 0:
     t, phi, theta, h, u, v = pb.solve(verbose, save)
 else:
     h, u, v = pb.solve(verbose, save)
 
 # --- STORE THE SOLUTION --- #
 
-if (save > 0):
-    baseName = './data/swes-%s-%s-M%i-N%i-T%i-%i-' % (version, str(IC), M, N, T, diffusion)
+if save > 0:
+    baseName = "./data/swes-%s-%s-M%i-N%i-T%i-%i-" % (
+        version,
+        str(IC),
+        M,
+        N,
+        T,
+        diffusion,
+    )
 
     # Save h
-    with open(baseName + 'h', 'wb') as f:
-        pickle.dump([M, N, t, phi, theta, h], f, protocol = 2)
+    with open(baseName + "h", "wb") as f:
+        pickle.dump([M, N, t, phi, theta, h], f, protocol=2)
 
     # Save u
-    with open(baseName + 'u', 'wb') as f:
-        pickle.dump([M, N, t, phi, theta, u], f, protocol = 2)
+    with open(baseName + "u", "wb") as f:
+        pickle.dump([M, N, t, phi, theta, u], f, protocol=2)
 
     # Save v
-    with open(baseName + 'v', 'wb') as f:
-        pickle.dump([M, N, t, phi, theta, v], f, protocol = 2)
+    with open(baseName + "v", "wb") as f:
+        pickle.dump([M, N, t, phi, theta, v], f, protocol=2)
