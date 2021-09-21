@@ -40,8 +40,9 @@ class Solver:
 
         # --- Build grid --- #
 
-        assert (M > 1) and (
-            N > 1
+        has_points = (M > 1) and (N > 1)
+        assert (
+            has_points
         ), "Number of grid points along each direction must be greater than one."
 
         # Discretize longitude

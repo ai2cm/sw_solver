@@ -10,4 +10,3 @@ build: ## build Docker container image
 
 enter: ## run Docker container and enter using volume mount for development
 	docker run -it -v $(shell pwd):$(WORK_DIR) -w $(WORK_DIR) --rm $(TAG_NAME)
-
