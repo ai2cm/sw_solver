@@ -1,3 +1,4 @@
+# WARNING: This is deprecated for now
 FROM nvidia/cuda:11.2.2-devel-ubuntu20.04
 ENV LANG C.UTF-8
 ENV LC_ALL C.UTF-8
