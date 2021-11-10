@@ -2,8 +2,8 @@
 
 import enum
 import math
-from collections import namedtuple
-from typing import Any, Optional, Tuple, Type
+from dataclasses import dataclass
+from typing import Optional, Tuple, Type
 
 import numpy as np
 
@@ -13,29 +13,30 @@ FloatArray1D = Type[np.ndarray]
 FloatArray2D = Type[np.ndarray]
 FloatArray3D = Type[np.ndarray]
 
-EarthConstantsT_ = namedtuple(
-    "EarthConstantsT_", ["g", "rho", "a", "omega", "scaleHeight", "nu"]
-)
 
-
-class EarthConstantsT(EarthConstantsT_):
+@dataclass(frozen=True)
+class EarthConstants:
     """
     Constants for Earth.
 
     g : gravity [m/s2]
     rho: average atmosphere density [kg/m3]
     a : average radius [m]
-    omega : otation rate [Hz]
+    omega : rotation rate [Hz]
     scaleHeight : atmosphere scale height [m]
     nu : viscosity [m2/s]
+
     """
 
-    pass
+    g = 9.80616
+    rho = 1.2
+    a = 6.37122e6
+    omega = 7.292e-5
+    scaleHeight = 8.0e3
+    nu = 5.0e5
 
 
-EARTH_CONSTANTS = EarthConstantsT(
-    g=9.80616, rho=1.2, a=6.37122e6, omega=7.292e-5, scaleHeight=8.0e3, nu=5.0e5
-)
+EARTH_CONSTANTS = EarthConstants()
 
 
 class ICType(enum.IntEnum):
@@ -49,11 +50,14 @@ class ICType(enum.IntEnum):
 
 
 class CartesianGrid:
-    """Cartesian Grid."""
+    """Cartesian Grid.
+
+    TODO: Document attributes.
+
+    """
 
     x: FloatArray2D
     y: FloatArray2D
-    y1: FloatArray2D
 
     dx: FloatArray2D
     dy: FloatArray2D
@@ -71,12 +75,12 @@ class CartesianGrid:
         # Coordinates
         self.x = EARTH_CONSTANTS.a * np.cos(latlon_grid.theta) * latlon_grid.phi
         self.y = EARTH_CONSTANTS.a * latlon_grid.theta
-        self.y1 = EARTH_CONSTANTS.a * np.sin(latlon_grid.theta)
+        y1 = EARTH_CONSTANTS.a * np.sin(latlon_grid.theta)
 
         # Increments
         self.dx = self.x[1:, :] - self.x[:-1, :]
         self.dy = self.y[:, 1:] - self.y[:, :-1]
-        self.dy1 = self.y1[:, 1:] - self.y1[:, :-1]
+        self.dy1 = y1[:, 1:] - y1[:, :-1]
 
         # Compute mimimum distance between grid points on the sphere.
         # This will be useful for CFL condition
@@ -91,7 +95,11 @@ class CartesianGrid:
 
 
 class LatLonGrid:
-    """Latitude-Longitude Grid."""
+    """Latitude-Longitude Grid.
+
+    TODO: Document attributes.
+
+    """
 
     phi: FloatArray2D
     theta: FloatArray2D
@@ -147,7 +155,11 @@ class LatLonGrid:
 
 
 class DiffusionCoefficients:
-    """Diffusion coefficient array container."""
+    """Diffusion coefficient array container.
+
+    TODO: Document attributes.
+
+    """
 
     Ax: FloatArray2D
     Bx: FloatArray2D
@@ -196,9 +208,9 @@ class DiffusionCoefficients:
         self.Cy = np.concatenate((Cy[:, 0:1], Cy, Cy[:, -1:]), axis=1)
 
 
-def set_initial_conditions(ic_type: ICType, latlon_grid: LatLonGrid, **kwargs: Any):
+def get_initial_conditions(ic_type: ICType, latlon_grid: LatLonGrid):
     """
-    Set initial conditions.
+    Compute the initial condition state based on the grid and type.
 
     Parameters
     ----------
@@ -206,8 +218,6 @@ def set_initial_conditions(ic_type: ICType, latlon_grid: LatLonGrid, **kwargs: A
         The initial condition type (see enum).
     latlon_grid : LatLonGrid
         Input grid on lat-lon points.
-    **kwargs
-        Other data needed for the initial condition.
 
     Returns
     -------
@@ -364,7 +374,6 @@ class NumpySolver:
         ic_type: ICType,
         courant: float,
         diffusion: bool,
-        **kwargs: Any,
     ):
         """
         Solver constructor.
@@ -386,8 +395,6 @@ class NumpySolver:
             CFL number.
         diffusion : bool
             If True, adds a diffusion terms.
-        **kwargs
-            Other data needed for the initial condition evaluation.
 
         """
         self.latlon_grid = LatLonGrid(M, N)
@@ -420,8 +427,8 @@ class NumpySolver:
             raise TypeError(
                 f"Invalid problem IC: {ic_type}. See code documentation for implemented initial conditions."
             )
-        self.h, self.u, self.v, self.f = set_initial_conditions(
-            ic_type, self.latlon_grid, **kwargs
+        self.h, self.u, self.v, self.f = get_initial_conditions(
+            ic_type, self.latlon_grid
         )
 
     def compute_laplacian(
@@ -745,7 +752,9 @@ class NumpySolver:
 
     def _solve(self, print_interval: int, save_interval: int):
         """
-        Solver.
+        Run the internal solver.
+
+        See the interface methods: solve and solve_and_save.
 
         Parameters
         ----------

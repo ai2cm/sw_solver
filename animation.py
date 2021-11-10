@@ -1,4 +1,5 @@
-"""Script to plot results coming from finite difference SWES solver.
+"""
+Script to plot results coming from finite difference SWES solver.
 
 The user may specify all the solver options and let the code look for
 the correspondent dataset or directly give the path to the dataset.
