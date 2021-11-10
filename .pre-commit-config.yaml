@@ -33,14 +33,14 @@ repos:
 -   repo: https://github.com/pre-commit/mirrors-isort
     rev: v5.9.3
     hooks:
-    -   id: isort
+    - id: isort
+      args: ["--profile", "black", "--filter-files"]
 
 - repo: https://gitlab.com/PyCQA/flake8
   rev: 4.0.1
   hooks:
   - id: flake8
     additional_dependencies:
-    - darglint
     - flake8-bugbear
     - flake8-builtins
     - flake8-debugger
