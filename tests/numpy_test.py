@@ -1,3 +1,5 @@
+"""Tests for the numpy version."""
+
 import pickle
 
 import numpy as np
@@ -6,7 +8,7 @@ import sw_solver
 
 
 def test_numpy():
-
+    """Test against serialized data."""
     # --- SETTINGS --- #
 
     # Solver version:
@@ -17,7 +19,7 @@ def test_numpy():
     # Initial condition:
     # 	* 0: sixth test case of Williamson's suite
     # 	* 1: second test case of Williamson's suite
-    IC = 0
+    IC = sw_solver.numpy.ICType.RossbyHaurwitzWave
 
     # Simulation length (in days); better to use integer values.
     # Suggested simulation length for Williamson's test cases:
@@ -36,14 +38,14 @@ def test_numpy():
 
     # --- RUN THE SOLVER --- #
 
-    pb = sw_solver.numpy.Solver(T, M, N, IC, CFL, diffusion)
-    t, phi, theta, h, u, v = pb.solve(0, 500)
+    pb = sw_solver.numpy.NumpySolver(T, M, N, IC, CFL, diffusion)
+    t, phi, theta, h, u, v = pb.solve_and_save(0, 500)
 
     # --- VALIDATE THE SOLUTION --- #
 
     refBaseName = "./data/swes-ref-%s-%s-M%i-N%i-T%i-%i-" % (
         version,
-        str(IC),
+        int(IC),
         M,
         N,
         T,

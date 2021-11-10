@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-Driver for running NumPy implementation of a finite difference
-solver for Shallow Water Equations on a Sphere (SWES).
-"""
+"""Driver for running the solver for the Shallow Water Equations on a Sphere (SWES)."""
 
 import pickle
 
@@ -20,7 +17,7 @@ if version == "numpy":
 # Initial condition:
 # 	* 0: sixth test case of Williamson's suite
 # 	* 1: second test case of Williamson's suite
-IC = 0
+IC = SWES.ICType.RossbyHaurwitzWave
 
 # Simulation length (in days); better to use integer values.
 # Suggested simulation length for Williamson's test cases:
@@ -45,7 +42,7 @@ save = 500
 
 # --- RUN THE SOLVER --- #
 
-pb = SWES.Solver(T, M, N, IC, CFL, diffusion)
+pb = SWES.NumpySolver(T, M, N, IC, CFL, diffusion)
 if save > 0:
     t, phi, theta, h, u, v = pb.solve(verbose, save)
 else:

@@ -1,15 +1,13 @@
-"""
-Script to plot results coming from finite difference SWES solver.
+"""Script to plot results coming from finite difference SWES solver.
+
 The user may specify all the solver options and let the code look for
 the correspondent dataset or directly give the path to the dataset.
 In any case, the user should specify all the settings.
 """
 
 import math
-import os
 import pickle
 
-import matplotlib
 import matplotlib.animation as manimation
 import matplotlib.pyplot as plt
 import numpy as np
@@ -39,6 +37,8 @@ save_movie = True
 movie_format = "mpg"
 fps = 15
 
+
+surf = None
 
 # --- LOAD DATA --- #
 
