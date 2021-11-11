@@ -489,9 +489,9 @@ def solve(
 
     if save_interval > 0:
         tsave = [0.0]
-        hsave = h[1:-1, :, np.newaxis]
-        usave = u[1:-1, :, np.newaxis]
-        vsave = v[1:-1, :, np.newaxis]
+        hsave = h[1:-1, :, np.newaxis].copy()
+        usave = u[1:-1, :, np.newaxis].copy()
+        vsave = v[1:-1, :, np.newaxis].copy()
 
         num_steps = 0
         time = 0.0
