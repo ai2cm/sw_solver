@@ -1,6 +1,5 @@
 """Numpy version of the SWES solver."""
 
-import logging
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -547,9 +546,8 @@ def solve(
             if print_interval > 0 and (num_steps % print_interval == 0):
                 norm = np.sqrt(u * u + v * v)
                 umax = norm.max()
-                logging.info(
-                    "Time = %6.2f hours (max %i); max(|u|) = %16.16f"
-                    % (time / 3600.0, int(final_time / 3600.0), umax)
+                print(
+                    f"Time = {time / 3600.0:6.2f} hours (max {int(final_time / 3600.0)}); max(|u|) = {umax:16.16f}"
                 )
 
             if save_interval > 0 and (num_steps % save_interval == 0):
