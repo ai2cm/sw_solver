@@ -1,76 +1,39 @@
 #!/usr/bin/env python3
-"""
-Driver for running NumPy implementation of a finite difference
-solver for Shallow Water Equations on a Sphere (SWES).
-"""
+"""Driver for running the solver for the Shallow Water Equations on a Sphere (SWES)."""
 
-import pickle
+import cartopy.crs as ccrs
+import matplotlib.pyplot as plt
 
-# --- SETTINGS --- #
+import sw_solver
 
-# Solver version:
-# 	* numpy (NumPy version)
-#   * gt4py (DSL version)
-version = "numpy"
+IC = sw_solver.ICType.RossbyHaurwitzWave
 
-# Import
-if version == "numpy":
-    import sw_solver.numpy as SWES
+T = 8
 
-# Initial condition:
-# 	* 0: sixth test case of Williamson's suite
-# 	* 1: second test case of Williamson's suite
-IC = 0
+M = 30
+N = 30
 
-# Simulation length (in days); better to use integer values.
-# Suggested simulation length for Williamson's test cases:
-T = 5
-
-# Grid dimensions
-M = 180
-N = 90
-
-# CFL number
 CFL = 0.5
 
-# Various solver settings:
-# 	* diffusion: take diffusion into account
 diffusion = True
 
-# Output settings:
-# 	* verbose: 	specify number of iterations between two consecutive output
-# 	* save:		specify number of iterations between two consecutive stored timesteps
-verbose = 500
-save = 500
+verbose = 50
+save = 50
 
-# --- RUN THE SOLVER --- #
+save_data = {"interval": save}
+sw_solver.numpy.solve(
+    M, N, IC, T, CFL, diffusion, save_data=save_data, print_interval=verbose
+)
+h, u, v, t = save_data["h"], save_data["u"], save_data["v"], save_data["t"]
+phi, theta = save_data["phi"], save_data["theta"]
 
-pb = SWES.Solver(T, M, N, IC, CFL, diffusion)
-if save > 0:
-    t, phi, theta, h, u, v = pb.solve(verbose, save)
-else:
-    h, u, v = pb.solve(verbose, save)
+fig = plt.figure(figsize=(10, 5))
+ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
 
-# --- STORE THE SOLUTION --- #
+ax.contourf(phi[1:-1, :], theta[1:-1, :], u[:, :, -1])
+plt.show()
 
-if save > 0:
-    baseName = "./data/swes-%s-%s-M%i-N%i-T%i-%i-" % (
-        version,
-        str(IC),
-        M,
-        N,
-        T,
-        diffusion,
-    )
-
-    # Save h
-    with open(baseName + "h", "wb") as f:
-        pickle.dump([M, N, t, phi, theta, h], f, protocol=2)
-
-    # Save u
-    with open(baseName + "u", "wb") as f:
-        pickle.dump([M, N, t, phi, theta, u], f, protocol=2)
-
-    # Save v
-    with open(baseName + "v", "wb") as f:
-        pickle.dump([M, N, t, phi, theta, v], f, protocol=2)
+# Numpy serialized data:
+# M = 10, N = 10, T = 2, CFL = 0.5, save = 392
+# for array, var in zip((h, u, v, t, phi, theta), ("h", "u", "v", "t", "phi", "theta")):
+#     np.save(f"data/swes-numpy-ref-10-{var}.npy", array)

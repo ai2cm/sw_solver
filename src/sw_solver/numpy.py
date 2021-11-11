@@ -1,749 +1,568 @@
-#!/usr/bin/env python3
+"""Numpy version of the SWES solver."""
 
-import math
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
+from .grid import CartesianGrid, LatLonGrid
+from .ic import ICType, get_initial_conditions
+from .utils import EARTH_CONSTANTS, FloatArray2D, FloatT
 
-class Solver:
-    """
-    NumPy implementation of a solver class for
-    Shallow Water Equations over the surface of a sphere (SWES).
 
-    Notation employed:
-    * h			fluid height
-    * hs		terrain height (topography)
-    * ht		total height (ht = hs + h)
-    * phi		longitude
-    * R			planet radius
-    * theta		latitude
-    * u			longitudinal fluid velocity
-    * v			latitudinal fluid velocity
+class DiffusionCoefficients:
+    """Diffusion coefficient array container.
+
+    TODO: Document attributes.
+
     """
 
-    def __init__(self, T, M, N, IC, CFL, diffusion):
-        """
-        Constructor.
+    Ax: FloatArray2D
+    Bx: FloatArray2D
+    Cx: FloatArray2D
 
-        :param	T:	simulation length [days]
-        :param	M:	number of grid points along longitude
-        :param	N:	number of grid points along latitude
-        :param	IC:	tuple storing in first position the ID of the initial condition,
-                    then possibly needed parameters. Options for ID:
-                    * 0: test case 6 by Williamson
-                    * 1: test case 2 by Williamson
-        :param	CFL:	CFL number
-        :param	diffusion:
-                    * TRUE to take viscous diffusion into account,
-                    * FALSE otherwise
-        """
+    Ay: FloatArray2D
+    By: FloatArray2D
+    Cy: FloatArray2D
 
-        # --- Build grid --- #
+    def __init__(self, cart_grid: CartesianGrid):
+        """Compute the coefficients."""
+        # Centered finite difference along longitude
+        # Ax, Bx and Cx denote the coefficients associated
+        # to the centred, upwind and downwind point, respectively
+        Ax = (cart_grid.dx[1:, 1:-1] - cart_grid.dx[:-1, 1:-1]) / (
+            cart_grid.dx[1:, 1:-1] * cart_grid.dx[:-1, 1:-1]
+        )
+        self.Ax = np.concatenate((Ax[-2:-1, :], Ax, Ax[1:2, :]), axis=0)
 
-        has_points = (M > 1) and (N > 1)
-        assert (
-            has_points
-        ), "Number of grid points along each direction must be greater than one."
+        Bx = cart_grid.dx[:-1, 1:-1] / (
+            cart_grid.dx[1:, 1:-1] * (cart_grid.dx[1:, 1:-1] + cart_grid.dx[:-1, 1:-1])
+        )
+        self.Bx = np.concatenate((Bx[-2:-1, :], Bx, Bx[1:2, :]), axis=0)
 
-        # Discretize longitude
-        self.M = M
-        self.dphi = 2.0 * math.pi / self.M
-        self.phi1D = np.linspace(-self.dphi, 2.0 * math.pi + self.dphi, self.M + 3)
+        Cx = -cart_grid.dx[1:, 1:-1] / (
+            cart_grid.dx[:-1, 1:-1] * (cart_grid.dx[1:, 1:-1] + cart_grid.dx[:-1, 1:-1])
+        )
+        self.Cx = np.concatenate((Cx[-2:-1, :], Cx, Cx[1:2, :]), axis=0)
 
-        # Discretize latitude
-        # Note: we exclude the poles and only consider a channel from -85 S to 85 N to avoid pole problem
-        # Note: the number of grid points must be even to prevent f to vanish
-        #       (important for computing initial height and velocity in geostrophic balance)
-        if N % 2 == 0:
-            self.N = N
+        # Centered finite difference along latitude
+        # Ay, By and Cy denote the coefficients associated
+        # to the centred, upwind and downwind point, respectively
+        Ay = (cart_grid.dy[1:-1, 1:] - cart_grid.dy[1:-1, :-1]) / (
+            cart_grid.dy[1:-1, 1:] * cart_grid.dy[1:-1, :-1]
+        )
+        self.Ay = np.concatenate((Ay[:, 0:1], Ay, Ay[:, -1:]), axis=1)
+
+        By = cart_grid.dy[1:-1, :-1] / (
+            cart_grid.dy[1:-1, 1:] * (cart_grid.dy[1:-1, 1:] + cart_grid.dy[1:-1, :-1])
+        )
+        self.By = np.concatenate((By[:, 0:1], By, By[:, -1:]), axis=1)
+
+        Cy = -cart_grid.dy[1:-1, 1:] / (
+            cart_grid.dy[1:-1, :-1] * (cart_grid.dy[1:-1, 1:] + cart_grid.dy[1:-1, :-1])
+        )
+        self.Cy = np.concatenate((Cy[:, 0:1], Cy, Cy[:, -1:]), axis=1)
+
+
+def compute_laplacian(coeff: DiffusionCoefficients, q: FloatArray2D) -> FloatArray2D:
+    """
+    Evaluate the Laplacian of a given quantity.
+
+    The approximations is given by applying twice a centre finite difference
+    formula along both axis.
+
+    Parameters
+    ----------
+    coeff : DiffusionCoefficients
+        The computed diffusion coefficients.
+    q : FloatArray2D
+        The field to take differences from.
+
+    Returns
+    -------
+    FloatArray2D
+        The Laplacian of q.
+
+    """
+    # Compute second order derivative along longitude
+    qxx = (
+        coeff.Ax[1:-1, :]
+        * (
+            coeff.Ax[1:-1, :] * q[2:-2, 2:-2]
+            + coeff.Bx[1:-1, :] * q[3:-1, 2:-2]
+            + coeff.Cx[1:-1, :] * q[1:-3, 2:-2]
+        )
+        + coeff.Bx[1:-1, :]
+        * (
+            coeff.Ax[2:, :] * q[3:-1, 2:-2]
+            + coeff.Bx[2:, :] * q[4:, 2:-2]
+            + coeff.Cx[2:, :] * q[2:-2, 2:-2]
+        )
+        + coeff.Cx[1:-1, :]
+        * (
+            coeff.Ax[:-2, :] * q[1:-3, 2:-2]
+            + coeff.Bx[:-2, :] * q[2:-2, 2:-2]
+            + coeff.Cx[:-2, :] * q[:-4, 2:-2]
+        )
+    )
+
+    # Compute second order derivative along latitude
+    qyy = (
+        coeff.Ay[:, 1:-1]
+        * (
+            coeff.Ay[:, 1:-1] * q[2:-2, 2:-2]
+            + coeff.By[:, 1:-1] * q[2:-2, 3:-1]
+            + coeff.Cy[:, 1:-1] * q[2:-2, 1:-3]
+        )
+        + coeff.By[:, 1:-1]
+        * (
+            coeff.Ay[:, 2:] * q[2:-2, 3:-1]
+            + coeff.By[:, 2:] * q[2:-2, 4:]
+            + coeff.Cy[:, 2:] * q[2:-2, 2:-2]
+        )
+        + coeff.Cy[:, 1:-1]
+        * (
+            coeff.Ay[:, :-2] * q[2:-2, 1:-3]
+            + coeff.By[:, :-2] * q[2:-2, 2:-2]
+            + coeff.Cy[:, :-2] * q[2:-2, :-4]
+        )
+    )
+
+    # Compute Laplacian
+    qlap = qxx + qyy
+
+    return qlap
+
+
+def lax_wendroff_update(
+    latlon_grid: LatLonGrid,
+    cart_grid: CartesianGrid,
+    diffusion: Optional[DiffusionCoefficients],
+    dt: FloatT,
+    f: FloatArray2D,
+    hs: FloatArray2D,
+    h: FloatArray2D,
+    u: FloatArray2D,
+    v: FloatArray2D,
+) -> Tuple[FloatArray2D, FloatArray2D, FloatArray2D]:
+    """
+    Update solution through finite difference Lax-Wendroff scheme.
+
+    The Coriolis effect is taken into account in Lax-Wendroff step,
+    while diffusion is separately added afterwards.
+
+    Parameters
+    ----------
+    latlon_grid : LatLonGrid
+        Grid on the latitude-longitude coordinates.
+    cart_grid : CartesianGrid
+        Cartesian grid.
+    diffusion : DiffusionCoefficient, optional
+        Computed diffusion coefficients, if using.
+    dt : FloatT
+        Timestep.
+    f : FloatArray2D
+        Coriolis force.
+    hs : FloatArray2D
+        Terrain height.
+    h : FloatArray2D
+        Fluid height at current timestep.
+    u : FloatArray2D
+        Longitudinal velocity at current timestep.
+    v : FloatArray2D
+        Latitudinal velocity at current timestep.
+
+    Returns
+    -------
+    hnew : FloatArray2D
+        Updated fluid height.
+    unew : FloatArray2D
+        Updated longitudinal velocity.
+    vnew : FloatArray2D
+        Updated latitudinal velocity.
+
+    """
+    # --- Auxiliary variables --- #
+
+    v1 = v * latlon_grid.c
+    hu = h * u
+    hv = h * v
+    hv1 = h * v1
+
+    # --- Compute mid-point values after half timestep --- #
+
+    # Mid-point value for h along x
+    hMidx = 0.5 * (h[1:, 1:-1] + h[:-1, 1:-1]) - 0.5 * dt / cart_grid.dx[:, 1:-1] * (
+        hu[1:, 1:-1] - hu[:-1, 1:-1]
+    )
+
+    # Mid-point value for h along y
+    hMidy = 0.5 * (h[1:-1, 1:] + h[1:-1, :-1]) - 0.5 * dt / cart_grid.dy1[1:-1, :] * (
+        hv1[1:-1, 1:] - hv1[1:-1, :-1]
+    )
+
+    # Mid-point value for hu along x
+    Ux = hu * u + 0.5 * EARTH_CONSTANTS.g * h * h
+    huMidx = (
+        0.5 * (hu[1:, 1:-1] + hu[:-1, 1:-1])
+        - 0.5 * dt / cart_grid.dx[:, 1:-1] * (Ux[1:, 1:-1] - Ux[:-1, 1:-1])
+        + 0.5
+        * dt
+        * (
+            0.5 * (f[1:, 1:-1] + f[:-1, 1:-1])
+            + 0.5
+            * (u[1:, 1:-1] + u[:-1, 1:-1])
+            * latlon_grid.tgMidx
+            / EARTH_CONSTANTS.a
+        )
+        * (0.5 * (hv[1:, 1:-1] + hv[:-1, 1:-1]))
+    )
+
+    # Mid-point value for hu along y
+    Uy = hu * v1
+    huMidy = (
+        0.5 * (hu[1:-1, 1:] + hu[1:-1, :-1])
+        - 0.5 * dt / cart_grid.dy1[1:-1, :] * (Uy[1:-1, 1:] - Uy[1:-1, :-1])
+        + 0.5
+        * dt
+        * (
+            0.5 * (f[1:-1, 1:] + f[1:-1, :-1])
+            + 0.5
+            * (u[1:-1, 1:] + u[1:-1, :-1])
+            * latlon_grid.tgMidy
+            / EARTH_CONSTANTS.a
+        )
+        * (0.5 * (hv[1:-1, 1:] + hv[1:-1, :-1]))
+    )
+
+    # Mid-point value for hv along x
+    Vx = hu * v
+    hvMidx = (
+        0.5 * (hv[1:, 1:-1] + hv[:-1, 1:-1])
+        - 0.5 * dt / cart_grid.dx[:, 1:-1] * (Vx[1:, 1:-1] - Vx[:-1, 1:-1])
+        - 0.5
+        * dt
+        * (
+            0.5 * (f[1:, 1:-1] + f[:-1, 1:-1])
+            + 0.5
+            * (u[1:, 1:-1] + u[:-1, 1:-1])
+            * latlon_grid.tgMidx
+            / EARTH_CONSTANTS.a
+        )
+        * (0.5 * (hu[1:, 1:-1] + hu[:-1, 1:-1]))
+    )
+
+    # Mid-point value for hv along y
+    Vy1 = hv * v1
+    Vy2 = 0.5 * EARTH_CONSTANTS.g * h * h
+    hvMidy = (
+        0.5 * (hv[1:-1, 1:] + hv[1:-1, :-1])
+        - 0.5 * dt / cart_grid.dy1[1:-1, :] * (Vy1[1:-1, 1:] - Vy1[1:-1, :-1])
+        - 0.5 * dt / cart_grid.dy[1:-1, :] * (Vy2[1:-1, 1:] - Vy2[1:-1, :-1])
+        - 0.5
+        * dt
+        * (
+            0.5 * (f[1:-1, 1:] + f[1:-1, :-1])
+            + 0.5
+            * (u[1:-1, 1:] + u[1:-1, :-1])
+            * latlon_grid.tgMidy
+            / EARTH_CONSTANTS.a
+        )
+        * (0.5 * (hu[1:-1, 1:] + hu[1:-1, :-1]))
+    )
+
+    # --- Compute solution at next timestep --- #
+
+    # Update fluid height
+    hnew = (
+        h[1:-1, 1:-1]
+        - dt / cart_grid.dxc * (huMidx[1:, :] - huMidx[:-1, :])
+        - dt
+        / cart_grid.dy1c
+        * (
+            hvMidy[:, 1:] * latlon_grid.cMidy[:, 1:]
+            - hvMidy[:, :-1] * latlon_grid.cMidy[:, :-1]
+        )
+    )
+
+    # Update longitudinal moment
+    UxMid = np.where(
+        hMidx > 0.0,
+        huMidx * huMidx / hMidx + 0.5 * EARTH_CONSTANTS.g * hMidx * hMidx,
+        0.5 * EARTH_CONSTANTS.g * hMidx * hMidx,
+    )
+    UyMid = np.where(hMidy > 0.0, hvMidy * latlon_grid.cMidy * huMidy / hMidy, 0.0)
+    hunew = (
+        hu[1:-1, 1:-1]
+        - dt / cart_grid.dxc * (UxMid[1:, :] - UxMid[:-1, :])
+        - dt / cart_grid.dy1c * (UyMid[:, 1:] - UyMid[:, :-1])
+        + dt
+        * (
+            f[1:-1, 1:-1]
+            + 0.25
+            * (
+                huMidx[:-1, :] / hMidx[:-1, :]
+                + huMidx[1:, :] / hMidx[1:, :]
+                + huMidy[:, :-1] / hMidy[:, :-1]
+                + huMidy[:, 1:] / hMidy[:, 1:]
+            )
+            * latlon_grid.tg
+            / EARTH_CONSTANTS.a
+        )
+        * 0.25
+        * (hvMidx[:-1, :] + hvMidx[1:, :] + hvMidy[:, :-1] + hvMidy[:, 1:])
+        - dt
+        * EARTH_CONSTANTS.g
+        * 0.25
+        * (hMidx[:-1, :] + hMidx[1:, :] + hMidy[:, :-1] + hMidy[:, 1:])
+        * (hs[2:, 1:-1] - hs[:-2, 1:-1])
+        / (cart_grid.dx[:-1, 1:-1] + cart_grid.dx[1:, 1:-1])
+    )
+
+    # Update latitudinal moment
+    VxMid = np.where(hMidx > 0.0, hvMidx * huMidx / hMidx, 0.0)
+    Vy1Mid = np.where(hMidy > 0.0, hvMidy * hvMidy / hMidy * latlon_grid.cMidy, 0.0)
+    Vy2Mid = 0.5 * EARTH_CONSTANTS.g * hMidy * hMidy
+    hvnew = (
+        hv[1:-1, 1:-1]
+        - dt / cart_grid.dxc * (VxMid[1:, :] - VxMid[:-1, :])
+        - dt / cart_grid.dy1c * (Vy1Mid[:, 1:] - Vy1Mid[:, :-1])
+        - dt / cart_grid.dyc * (Vy2Mid[:, 1:] - Vy2Mid[:, :-1])
+        - dt
+        * (
+            f[1:-1, 1:-1]
+            + 0.25
+            * (
+                huMidx[:-1, :] / hMidx[:-1, :]
+                + huMidx[1:, :] / hMidx[1:, :]
+                + huMidy[:, :-1] / hMidy[:, :-1]
+                + huMidy[:, 1:] / hMidy[:, 1:]
+            )
+            * latlon_grid.tg
+            / EARTH_CONSTANTS.a
+        )
+        * 0.25
+        * (huMidx[:-1, :] + huMidx[1:, :] + huMidy[:, :-1] + huMidy[:, 1:])
+        - dt
+        * EARTH_CONSTANTS.g
+        * 0.25
+        * (hMidx[:-1, :] + hMidx[1:, :] + hMidy[:, :-1] + hMidy[:, 1:])
+        * (hs[1:-1, 2:] - hs[1:-1, :-2])
+        / (cart_grid.dy1[1:-1, :-1] + cart_grid.dy1[1:-1, 1:])
+    )
+
+    # Come back to original variables
+    unew = hunew / hnew
+    vnew = hvnew / hnew
+
+    # --- Add diffusion --- #
+
+    if diffusion:
+        # Extend fluid height
+        hext = np.concatenate((h[-4:-3, :], h, h[3:4, :]), axis=0)
+        hext = np.concatenate((hext[:, 0:1], hext, hext[:, -1:]), axis=1)
+
+        # Add the Laplacian
+        hnew += dt * EARTH_CONSTANTS.nu * compute_laplacian(diffusion, hext)
+
+        # Extend longitudinal velocity
+        uext = np.concatenate((u[-4:-3, :], u, u[3:4, :]), axis=0)
+        uext = np.concatenate((uext[:, 0:1], uext, uext[:, -1:]), axis=1)
+
+        # Add the Laplacian
+        unew += dt * EARTH_CONSTANTS.nu * compute_laplacian(diffusion, uext)
+
+        # Extend fluid height
+        vext = np.concatenate((v[-4:-3, :], v, v[3:4, :]), axis=0)
+        vext = np.concatenate((vext[:, 0:1], vext, vext[:, -1:]), axis=1)
+
+        # Add the Laplacian
+        vnew += dt * EARTH_CONSTANTS.nu * compute_laplacian(diffusion, vext)
+
+    return hnew, unew, vnew
+
+
+def _apply_bcs(q: FloatArray2D, qnew: FloatArray2D):
+    """
+    Apply boundary conditions to a quantity.
+
+    Parameters
+    ----------
+    q : FloatArray2D
+        Input quantity (this is modified).
+    qnew : FloatArray2D
+        Updated quantity.
+
+    Returns
+    -------
+    FloatArray2D
+        Quantity with boundary conditions applied.
+
+    """
+    q[:, 1:-1] = np.concatenate((qnew[-2:-1, :], qnew, qnew[1:2, :]), axis=0)
+    q[:, 0] = q[:, 1]
+    q[:, -1] = q[:, -2]
+
+    return q
+
+
+def solve(
+    num_lon_pts: int,
+    num_lat_pts: int,
+    ic_type: ICType,
+    sim_days: float,
+    courant: float,
+    use_diffusion: bool = True,
+    save_data: Optional[Dict[str, Any]] = None,
+    print_interval: int = -1,
+):
+    """
+    Numpy implementation of the SWES solver.
+
+    Parameters
+    ----------
+    num_lon_pts : int
+        Number of longitudinal gridpoints.
+    num_lat_pts : int
+        Number of latitudinal gridpoints.
+    ic_type : ICType
+        Initial condition type.
+    sim_days : float
+        Simulation days.
+    courant : float
+        CFL number.
+    use_diffusion : bool, optional
+        If True, adds a diffusion term (default: True).
+    save_data : dict, optional
+        If passed with the key "interval" and value > 0, will output
+        the following arrays in this dict:
+            * "h" : height.
+            * "u" : x-velocity.
+            * "v" : y-velocity.
+            * "t" : times for each savepoint (in secs).
+            * "phi" : grid data.
+            * "theta" : grid data.
+    print_interval : int
+        If positive, print to screen information about the solution
+        every 'verbose' timesteps.
+
+    Notes
+    -----
+    The following notation is used:
+    - h : fluid height
+    - hs : terrain height (topography)
+    - ht : total height (ht = hs + h)
+    - phi : longitude
+    - R : planet radius
+    - theta : latitude
+    - u : longitudinal fluid velocity
+    - v : latitudinal fluid velocity
+
+    """
+    if save_data is None:
+        save_data = {}
+
+    latlon_grid = LatLonGrid(num_lon_pts, num_lat_pts)
+    cart_grid = CartesianGrid(latlon_grid)
+
+    if sim_days < 0.0:
+        raise ValueError(f"Final time {sim_days} must be non-negative.")
+
+    hours_per_day: int = 24
+    seconds_per_hour: int = 3600
+    final_time = hours_per_day * seconds_per_hour * sim_days
+
+    # Note: currently just a flat surface
+    hs = np.zeros(latlon_grid.shape, FloatT)
+
+    diff_coeff = DiffusionCoefficients(cart_grid) if use_diffusion else None
+
+    if not isinstance(ic_type, ICType):
+        raise TypeError(
+            f"Invalid problem IC: {ic_type}. See code documentation for implemented initial conditions."
+        )
+
+    h, u, v, f = get_initial_conditions(ic_type, latlon_grid)
+
+    save_interval: int = save_data.get("interval", 0)
+
+    if save_interval > 0:
+        tsave = [0.0]
+        hsave = h[1:-1, :, np.newaxis].copy()
+        usave = u[1:-1, :, np.newaxis].copy()
+        vsave = v[1:-1, :, np.newaxis].copy()
+
+    num_steps = 0
+    time = 0.0
+    while time < final_time:
+
+        # Update number of iterations
+        num_steps += 1
+
+        # --- Compute timestep through CFL condition --- #
+        # Compute flux Jacobian eigenvalues
+        eigenx = (
+            np.maximum(
+                np.absolute(u - np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
+                np.maximum(
+                    np.absolute(u),
+                    np.absolute(u + np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
+                ),
+            )
+        ).max()
+
+        eigeny = (
+            np.maximum(
+                np.absolute(v - np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
+                np.maximum(
+                    np.absolute(v),
+                    np.absolute(v + np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
+                ),
+            )
+        ).max()
+
+        # Compute timestep
+        dtmax = np.minimum(cart_grid.dxmin / eigenx, cart_grid.dymin / eigeny)
+        dt = courant * dtmax
+
+        # If needed, adjust timestep not to exceed final time
+        if time + dt > final_time:
+            dt = final_time - time
+            time = final_time
         else:
-            self.N = N + 1
-            print(
-                "Warning: Number of grid points along latitude has been increased by one unit so to make it even."
-            )
-        self.theta_range = 85.0
-        self.dtheta = (2 * self.theta_range / 180.0) * math.pi / (self.N - 1)
-        self.theta1D = np.linspace(
-            -self.theta_range / 180.0 * math.pi,
-            self.theta_range / 180.0 * math.pi,
-            self.N,
+            time += dt
+
+        # --- Update solution --- #
+        hnew, unew, vnew = lax_wendroff_update(
+            latlon_grid, cart_grid, diff_coeff, dt, f, hs, h, u, v
         )
 
-        # Build grid
-        self.phi, self.theta = np.meshgrid(self.phi1D, self.theta1D, indexing="ij")
-
-        # Cosine of mid-point values for theta along y
-        self.c = np.cos(self.theta)
-        self.cMidy = np.cos(0.5 * (self.theta[1:-1, 1:] + self.theta[1:-1, :-1]))
-
-        # Compute $\tan(\theta)$
-        self.tg = np.tan(self.theta[1:-1, 1:-1])
-        self.tgMidx = np.tan(0.5 * (self.theta[:-1, 1:-1] + self.theta[1:, 1:-1]))
-        self.tgMidy = np.tan(0.5 * (self.theta[1:-1, :-1] + self.theta[1:-1, 1:]))
-
-        # --- Set planet's constants --- #
-
-        self.setPlanetConstants()
-
-        # --- Cartesian coordinates and increments --- #
-
-        # Coordinates
-        self.x = self.a * np.cos(self.theta) * self.phi
-        self.y = self.a * self.theta
-        self.y1 = self.a * np.sin(self.theta)
-
-        # Increments
-        self.dx = self.x[1:, :] - self.x[:-1, :]
-        self.dy = self.y[:, 1:] - self.y[:, :-1]
-        self.dy1 = self.y1[:, 1:] - self.y1[:, :-1]
-
-        # Compute mimimum distance between grid points on the sphere.
-        # This will be useful for CFL condition
-        self.dxmin = self.dx.min()
-        self.dymin = self.dy.min()
-
-        # "Centred" increments. Useful for updating solution
-        # with Lax-Wendroff scheme
-        self.dxc = 0.5 * (self.dx[:-1, 1:-1] + self.dx[1:, 1:-1])
-        self.dyc = 0.5 * (self.dy[1:-1, :-1] + self.dy[1:-1, 1:])
-        self.dy1c = 0.5 * (self.dy1[1:-1, :-1] + self.dy1[1:-1, 1:])
-
-        # --- Time discretization --- #
-
-        assert T >= 0, "Final time must be non-negative."
-
-        # Convert simulation length from days to seconds
-        self.T = 24.0 * 3600.0 * T
-
-        # CFL number; this will be used to determine the timestep
-        # at each iteration
-        self.CFL = CFL
-
-        # --- Terrain height --- #
-
-        # Note: currently just a flat surface
-        self.hs = np.zeros((self.M + 3, self.N), float)
-
-        # --- Set initial conditions --- #
-
-        assert IC in range(
-            2
-        ), "Invalid problem ID. See code documentation for implemented initial conditions."
-        self.IC = IC
-        self.setInitialConditions()
-
-        # --- Setup diffusion --- #
-        self.diffusion = diffusion
-
-        # Pre-compute coefficients of second-order approximations of first-order derivative
-        if self.diffusion:
-            # Centred finite difference along longitude
-            # Ax, Bx and Cx denote the coefficients associated
-            # to the centred, upwind and downwind point, respectively
-            self.Ax = (self.dx[1:, 1:-1] - self.dx[:-1, 1:-1]) / (
-                self.dx[1:, 1:-1] * self.dx[:-1, 1:-1]
-            )
-            self.Ax = np.concatenate(
-                (self.Ax[-2:-1, :], self.Ax, self.Ax[1:2, :]), axis=0
-            )
-
-            self.Bx = self.dx[:-1, 1:-1] / (
-                self.dx[1:, 1:-1] * (self.dx[1:, 1:-1] + self.dx[:-1, 1:-1])
-            )
-            self.Bx = np.concatenate(
-                (self.Bx[-2:-1, :], self.Bx, self.Bx[1:2, :]), axis=0
-            )
-
-            self.Cx = -self.dx[1:, 1:-1] / (
-                self.dx[:-1, 1:-1] * (self.dx[1:, 1:-1] + self.dx[:-1, 1:-1])
-            )
-            self.Cx = np.concatenate(
-                (self.Cx[-2:-1, :], self.Cx, self.Cx[1:2, :]), axis=0
-            )
-
-            # Centred finite difference along latitude
-            # Ay, By and Cy denote the coefficients associated
-            # to the centred, upwind and downwind point, respectively
-            self.Ay = (self.dy[1:-1, 1:] - self.dy[1:-1, :-1]) / (
-                self.dy[1:-1, 1:] * self.dy[1:-1, :-1]
-            )
-            self.Ay = np.concatenate(
-                (self.Ay[:, 0:1], self.Ay, self.Ay[:, -1:]), axis=1
-            )
-
-            self.By = self.dy[1:-1, :-1] / (
-                self.dy[1:-1, 1:] * (self.dy[1:-1, 1:] + self.dy[1:-1, :-1])
-            )
-            self.By = np.concatenate(
-                (self.By[:, 0:1], self.By, self.By[:, -1:]), axis=1
-            )
-
-            self.Cy = -self.dy[1:-1, 1:] / (
-                self.dy[1:-1, :-1] * (self.dy[1:-1, 1:] + self.dy[1:-1, :-1])
-            )
-            self.Cy = np.concatenate(
-                (self.Cy[:, 0:1], self.Cy, self.Cy[:, -1:]), axis=1
-            )
-
-    def setPlanetConstants(self):
-        """
-        Set Earth's constants.
-
-        :attribute	g:				gravity	[m/s2]
-        :attribute	rho:			average atmosphere density	[kg/m3]
-        :attribute	a:				average radius	[m]
-        :attribute	omega:			rotation rate	[Hz]
-        :attribute	scaleHeight:	atmosphere scale height	[m]
-        :attribute	nu:				viscosity	[m2/s]
-        :attribute	f:				Coriolis parameter	[Hz]
-
-        :param:
-
-        :return:
-        """
-
-        # Earth
-        self.g = 9.80616
-        self.rho = 1.2
-        self.a = 6.37122e6
-        self.omega = 7.292e-5
-        self.scaleHeight = 8.0e3
-        self.nu = 5.0e5
-
-        # Coriolis parameter
-        self.f = 2.0 * self.omega * np.sin(self.theta)
-
-    def setInitialConditions(self):
-        """
-        Set initial conditions.
-
-        :attribute	h:	initial fluid height
-        :attribute	u:	initial longitudinal velocity
-        :attribute	v:	initial latitudinal velocity
-
-        :param:
-
-        :return:
-        """
-
-        # --- IC 0: sixth test case taken from Williamson's suite --- #
-        # ---       Rossby-Haurwitz Wave                          --- #
-
-        if self.IC == 0:
-            # Set constants
-            w = 7.848e-6
-            K = 7.848e-6
-            h0 = 8e3
-            R = 4.0
-
-            # Compute initial fluid height
-            A = 0.5 * w * (2.0 * self.omega + w) * (
-                np.cos(self.theta) ** 2.0
-            ) + 0.25 * (K ** 2.0) * (np.cos(self.theta) ** (2.0 * R)) * (
-                (R + 1.0) * (np.cos(self.theta) ** 2.0)
-                + (2.0 * (R ** 2.0) - R - 2.0)
-                - 2.0 * (R ** 2.0) * (np.cos(self.theta) ** (-2.0))
-            )
-            B = (
-                (2.0 * (self.omega + w) * K)
-                / ((R + 1.0) * (R + 2.0))
-                * (np.cos(self.theta) ** R)
-                * (
-                    ((R ** 2.0) + 2.0 * R + 2.0)
-                    - ((R + 1.0) ** 2.0) * (np.cos(self.theta) ** 2.0)
-                )
-            )
-            C = (
-                0.25
-                * (K ** 2.0)
-                * (np.cos(self.theta) ** (2.0 * R))
-                * ((R + 1.0) * (np.cos(self.theta) ** 2.0) - (R + 2.0))
-            )
-
-            h = (
-                h0
-                + (
-                    (self.a ** 2.0) * A
-                    + (self.a ** 2.0) * B * np.cos(R * self.phi)
-                    + (self.a ** 2.0) * C * np.cos(2.0 * R * self.phi)
-                )
-                / self.g
-            )
-
-            # Compute initial wind
-            u = self.a * w * np.cos(self.theta) + self.a * K * (
-                np.cos(self.theta) ** (R - 1.0)
-            ) * (
-                R * (np.sin(self.theta) ** 2.0) - (np.cos(self.theta) ** 2.0)
-            ) * np.cos(
-                R * self.phi
-            )
-            v = (
-                -self.a
-                * K
-                * R
-                * (np.cos(self.theta) ** (R - 1.0))
-                * np.sin(self.theta)
-                * np.sin(R * self.phi)
-            )
-
-        # --- IC 1: second test case taken from Williamson's suite --- #
-        # ----      Steady State Nonlinear Zonal Geostrophic Flow  --- #
-
-        elif self.IC == 1:
-            # Suggested values for $\alpha$ for second
-            # test cases of Williamson's suite:
-            # 	- 0
-            # 	- 0.05
-            # 	- pi/2 - 0.05
-            # 	- pi/2
-            alpha = math.pi / 2
-
-            # Set constants
-            u0 = 2.0 * math.pi * self.a / (12.0 * 24.0 * 3600.0)
-            h0 = 2.94e4 / self.g
-
-            # Make Coriolis parameter dependent on longitude and latitude
-            self.f = (
-                2.0
-                * self.omega
-                * (
-                    -np.cos(self.phi) * np.cos(self.theta) * np.sin(alpha)
-                    + np.sin(self.theta) * np.cos(alpha)
-                )
-            )
-
-            # Compute initial height
-            h = (
-                h0
-                - (self.a * self.omega * u0 + 0.5 * (u0 ** 2.0))
-                * (
-                    (
-                        -np.cos(self.phi) * np.cos(self.theta) * np.sin(alpha)
-                        + np.sin(self.theta) * np.cos(alpha)
-                    )
-                    ** 2.0
-                )
-                / self.g
-            )
-
-            # Compute initial wind
-            u = u0 * (
-                np.cos(self.theta) * np.cos(alpha)
-                + np.cos(self.phi) * np.sin(self.theta) * np.sin(alpha)
-            )
-            self.uMidx = u0 * (
-                np.cos(0.5 * (self.theta[:-1, :] + self.theta[1:, :])) * np.cos(alpha)
-                + np.cos(0.5 * (self.phi[:-1, :] + self.phi[1:, :]))
-                * np.sin(0.5 * (self.theta[:-1, :] + self.theta[1:, :]))
-                * np.sin(alpha)
-            )
-            self.uMidy = u0 * (
-                np.cos(0.5 * (self.theta[:, :-1] + self.theta[:, 1:])) * np.cos(alpha)
-                + np.cos(0.5 * (self.phi[:, :-1] + self.phi[:, 1:]))
-                * np.sin(0.5 * (self.theta[:, :-1] + self.theta[:, 1:]))
-                * np.sin(alpha)
-            )
-
-            v = -u0 * np.sin(self.phi) * np.sin(alpha)
-            self.vMidx = (
-                -u0 * np.sin(0.5 * (self.phi[:-1, :] + self.phi[1:, :])) * np.sin(alpha)
-            )
-            self.vMidy = (
-                -u0 * np.sin(0.5 * (self.phi[:, :-1] + self.phi[:, 1:])) * np.sin(alpha)
-            )
-
-        self.h = h
-        self.u = u
-        self.v = v
-
-    def computeLaplacian(self, q):
-        """
-        Auxiliary methods evaluating the Laplacian of a given quantity
-        in all interior points of the grid. The approximations is given
-        by applying twice a centre finite difference formula along
-        both axis.
-
-        :param	q:	conserved quantity
-
-        :return qlap:	Laplacian of q
-        """
-
-        # Compute second order derivative along longitude
-        qxx = (
-            self.Ax[1:-1, :]
-            * (
-                self.Ax[1:-1, :] * q[2:-2, 2:-2]
-                + self.Bx[1:-1, :] * q[3:-1, 2:-2]
-                + self.Cx[1:-1, :] * q[1:-3, 2:-2]
-            )
-            + self.Bx[1:-1, :]
-            * (
-                self.Ax[2:, :] * q[3:-1, 2:-2]
-                + self.Bx[2:, :] * q[4:, 2:-2]
-                + self.Cx[2:, :] * q[2:-2, 2:-2]
-            )
-            + self.Cx[1:-1, :]
-            * (
-                self.Ax[:-2, :] * q[1:-3, 2:-2]
-                + self.Bx[:-2, :] * q[2:-2, 2:-2]
-                + self.Cx[:-2, :] * q[:-4, 2:-2]
-            )
-        )
-
-        # Compute second order derivative along latitude
-        qyy = (
-            self.Ay[:, 1:-1]
-            * (
-                self.Ay[:, 1:-1] * q[2:-2, 2:-2]
-                + self.By[:, 1:-1] * q[2:-2, 3:-1]
-                + self.Cy[:, 1:-1] * q[2:-2, 1:-3]
-            )
-            + self.By[:, 1:-1]
-            * (
-                self.Ay[:, 2:] * q[2:-2, 3:-1]
-                + self.By[:, 2:] * q[2:-2, 4:]
-                + self.Cy[:, 2:] * q[2:-2, 2:-2]
-            )
-            + self.Cy[:, 1:-1]
-            * (
-                self.Ay[:, :-2] * q[2:-2, 1:-3]
-                + self.By[:, :-2] * q[2:-2, 2:-2]
-                + self.Cy[:, :-2] * q[2:-2, :-4]
-            )
-        )
-
-        # Compute Laplacian
-        qlap = qxx + qyy
-
-        return qlap
-
-    def LaxWendroff(self, h, u, v):
-        """
-        Update solution through finite difference Lax-Wendroff scheme.
-        Note that Coriolis effect is taken into account in Lax-Wendroff step,
-        while diffusion is separately added afterwards.
-
-        :param	h:	fluid height at current timestep
-        :param	u:	longitudinal velocity at current timestep
-        :param	v:	latitudinal velocity at current timestep
-
-        :return	hnew:	updated fluid height
-        :return	unew:	updated longitudinal velocity
-        :return	vnew:	updated latitudinal velocity
-        """
-
-        # --- Auxiliary variables --- #
-
-        v1 = v * self.c
-        hu = h * u
-        hv = h * v
-        hv1 = h * v1
-
-        # --- Compute mid-point values after half timestep --- #
-
-        # Mid-point value for h along x
-        hMidx = 0.5 * (h[1:, 1:-1] + h[:-1, 1:-1]) - 0.5 * self.dt / self.dx[
-            :, 1:-1
-        ] * (hu[1:, 1:-1] - hu[:-1, 1:-1])
-
-        # Mid-point value for h along y
-        hMidy = 0.5 * (h[1:-1, 1:] + h[1:-1, :-1]) - 0.5 * self.dt / self.dy1[
-            1:-1, :
-        ] * (hv1[1:-1, 1:] - hv1[1:-1, :-1])
-
-        # Mid-point value for hu along x
-        Ux = hu * u + 0.5 * self.g * h * h
-        huMidx = (
-            0.5 * (hu[1:, 1:-1] + hu[:-1, 1:-1])
-            - 0.5 * self.dt / self.dx[:, 1:-1] * (Ux[1:, 1:-1] - Ux[:-1, 1:-1])
-            + 0.5
-            * self.dt
-            * (
-                0.5 * (self.f[1:, 1:-1] + self.f[:-1, 1:-1])
-                + 0.5 * (self.u[1:, 1:-1] + self.u[:-1, 1:-1]) * self.tgMidx / self.a
-            )
-            * (0.5 * (hv[1:, 1:-1] + hv[:-1, 1:-1]))
-        )
-
-        # Mid-point value for hu along y
-        Uy = hu * v1
-        huMidy = (
-            0.5 * (hu[1:-1, 1:] + hu[1:-1, :-1])
-            - 0.5 * self.dt / self.dy1[1:-1, :] * (Uy[1:-1, 1:] - Uy[1:-1, :-1])
-            + 0.5
-            * self.dt
-            * (
-                0.5 * (self.f[1:-1, 1:] + self.f[1:-1, :-1])
-                + 0.5 * (u[1:-1, 1:] + u[1:-1, :-1]) * self.tgMidy / self.a
-            )
-            * (0.5 * (hv[1:-1, 1:] + hv[1:-1, :-1]))
-        )
-
-        # Mid-point value for hv along x
-        Vx = hu * v
-        hvMidx = (
-            0.5 * (hv[1:, 1:-1] + hv[:-1, 1:-1])
-            - 0.5 * self.dt / self.dx[:, 1:-1] * (Vx[1:, 1:-1] - Vx[:-1, 1:-1])
-            - 0.5
-            * self.dt
-            * (
-                0.5 * (self.f[1:, 1:-1] + self.f[:-1, 1:-1])
-                + 0.5 * (u[1:, 1:-1] + u[:-1, 1:-1]) * self.tgMidx / self.a
-            )
-            * (0.5 * (hu[1:, 1:-1] + hu[:-1, 1:-1]))
-        )
-
-        # Mid-point value for hv along y
-        Vy1 = hv * v1
-        Vy2 = 0.5 * self.g * h * h
-        hvMidy = (
-            0.5 * (hv[1:-1, 1:] + hv[1:-1, :-1])
-            - 0.5 * self.dt / self.dy1[1:-1, :] * (Vy1[1:-1, 1:] - Vy1[1:-1, :-1])
-            - 0.5 * self.dt / self.dy[1:-1, :] * (Vy2[1:-1, 1:] - Vy2[1:-1, :-1])
-            - 0.5
-            * self.dt
-            * (
-                0.5 * (self.f[1:-1, 1:] + self.f[1:-1, :-1])
-                + 0.5 * (u[1:-1, 1:] + u[1:-1, :-1]) * self.tgMidy / self.a
-            )
-            * (0.5 * (hu[1:-1, 1:] + hu[1:-1, :-1]))
-        )
-
-        # --- Compute solution at next timestep --- #
-
-        # Update fluid height
-        hnew = (
-            h[1:-1, 1:-1]
-            - self.dt / self.dxc * (huMidx[1:, :] - huMidx[:-1, :])
-            - self.dt
-            / self.dy1c
-            * (hvMidy[:, 1:] * self.cMidy[:, 1:] - hvMidy[:, :-1] * self.cMidy[:, :-1])
-        )
-
-        # Update longitudinal moment
-        UxMid = np.where(
-            hMidx > 0.0,
-            huMidx * huMidx / hMidx + 0.5 * self.g * hMidx * hMidx,
-            0.5 * self.g * hMidx * hMidx,
-        )
-        UyMid = np.where(hMidy > 0.0, hvMidy * self.cMidy * huMidy / hMidy, 0.0)
-        hunew = (
-            hu[1:-1, 1:-1]
-            - self.dt / self.dxc * (UxMid[1:, :] - UxMid[:-1, :])
-            - self.dt / self.dy1c * (UyMid[:, 1:] - UyMid[:, :-1])
-            + self.dt
-            * (
-                self.f[1:-1, 1:-1]
-                + 0.25
-                * (
-                    huMidx[:-1, :] / hMidx[:-1, :]
-                    + huMidx[1:, :] / hMidx[1:, :]
-                    + huMidy[:, :-1] / hMidy[:, :-1]
-                    + huMidy[:, 1:] / hMidy[:, 1:]
-                )
-                * self.tg
-                / self.a
-            )
-            * 0.25
-            * (hvMidx[:-1, :] + hvMidx[1:, :] + hvMidy[:, :-1] + hvMidy[:, 1:])
-            - self.dt
-            * self.g
-            * 0.25
-            * (hMidx[:-1, :] + hMidx[1:, :] + hMidy[:, :-1] + hMidy[:, 1:])
-            * (self.hs[2:, 1:-1] - self.hs[:-2, 1:-1])
-            / (self.dx[:-1, 1:-1] + self.dx[1:, 1:-1])
-        )
-
-        # Update latitudinal moment
-        VxMid = np.where(hMidx > 0.0, hvMidx * huMidx / hMidx, 0.0)
-        Vy1Mid = np.where(hMidy > 0.0, hvMidy * hvMidy / hMidy * self.cMidy, 0.0)
-        Vy2Mid = 0.5 * self.g * hMidy * hMidy
-        hvnew = (
-            hv[1:-1, 1:-1]
-            - self.dt / self.dxc * (VxMid[1:, :] - VxMid[:-1, :])
-            - self.dt / self.dy1c * (Vy1Mid[:, 1:] - Vy1Mid[:, :-1])
-            - self.dt / self.dyc * (Vy2Mid[:, 1:] - Vy2Mid[:, :-1])
-            - self.dt
-            * (
-                self.f[1:-1, 1:-1]
-                + 0.25
-                * (
-                    huMidx[:-1, :] / hMidx[:-1, :]
-                    + huMidx[1:, :] / hMidx[1:, :]
-                    + huMidy[:, :-1] / hMidy[:, :-1]
-                    + huMidy[:, 1:] / hMidy[:, 1:]
-                )
-                * self.tg
-                / self.a
-            )
-            * 0.25
-            * (huMidx[:-1, :] + huMidx[1:, :] + huMidy[:, :-1] + huMidy[:, 1:])
-            - self.dt
-            * self.g
-            * 0.25
-            * (hMidx[:-1, :] + hMidx[1:, :] + hMidy[:, :-1] + hMidy[:, 1:])
-            * (self.hs[1:-1, 2:] - self.hs[1:-1, :-2])
-            / (self.dy1[1:-1, :-1] + self.dy1[1:-1, 1:])
-        )
-
-        # Come back to original variables
-        unew = hunew / hnew
-        vnew = hvnew / hnew
-
-        # --- Add diffusion --- #
-
-        if self.diffusion:
-            # Extend fluid height
-            hext = np.concatenate((h[-4:-3, :], h, h[3:4, :]), axis=0)
-            hext = np.concatenate((hext[:, 0:1], hext, hext[:, -1:]), axis=1)
-
-            # Add the Laplacian
-            hnew += self.dt * self.nu * self.computeLaplacian(hext)
-
-            # Extend longitudinal velocity
-            uext = np.concatenate((u[-4:-3, :], u, u[3:4, :]), axis=0)
-            uext = np.concatenate((uext[:, 0:1], uext, uext[:, -1:]), axis=1)
-
-            # Add the Laplacian
-            unew += self.dt * self.nu * self.computeLaplacian(uext)
-
-            # Extend fluid height
-            vext = np.concatenate((v[-4:-3, :], v, v[3:4, :]), axis=0)
-            vext = np.concatenate((vext[:, 0:1], vext, vext[:, -1:]), axis=1)
-
-            # Add the Laplacian
-            vnew += self.dt * self.nu * self.computeLaplacian(vext)
-
-        return hnew, unew, vnew
-
-    def solve(self, verbose, save):
-        """
-        Solver.
-
-        :param	verbose:	if positive, print to screen information about the solution
-                            every 'verbose' timesteps
-        :param	save:	if positive, store the solution every 'save' timesteps
-
-        :return	h:	if save <= 0, fluid height at final time
-        :return	u:	if save <= 0, fluid longitudinal velocity at final time
-        :return	v:	if save <= 0, fluid latitudinal velocity at final time
-        :return tsave:	if save > 0, stored timesteps
-        :return	phi:	if save > 0, longitudinal coordinates of grid points
-        :return theta:	if save > 0, latitudinal coordinates of grid points
-        :return	hsave:	if save > 0, stored fluid height
-        :return	usave:	if save > 0, stored longitudinal velocity
-        :return	vsave:	if save > 0, stored latitudinal velocity
-        """
-
-        verbose = int(verbose)
-        save = int(save)
+        # --- Update solution applying BCs --- #
+        h = _apply_bcs(h, hnew)
+        u = _apply_bcs(u, unew)
+        v = _apply_bcs(v, vnew)
 
         # --- Print and save --- #
-
-        # Print to screen
-        if verbose > 0:
-            norm = np.sqrt(self.u * self.u + self.v * self.v)
+        if print_interval > 0 and (num_steps % print_interval == 0):
+            norm = np.sqrt(u * u + v * v)
             umax = norm.max()
             print(
-                "Time = %6.2f hours (max %i); max(|u|) = %8.8f"
-                % (0.0, int(self.T / 3600.0), umax)
+                f"Time = {time / 3600.0:6.2f} hours (max {int(final_time / 3600.0)}); max(|u|) = {umax:16.16f}"
             )
 
-        # Save
-        if save > 0:
-            tsave = np.array([[0.0]])
-            hsave = self.h[1:-1, :, np.newaxis]
-            usave = self.u[1:-1, :, np.newaxis]
-            vsave = self.v[1:-1, :, np.newaxis]
+        if save_interval > 0 and (num_steps % save_interval == 0):
+            tsave.append(time)
+            hsave = np.concatenate((hsave, h[1:-1, :, np.newaxis]), axis=2)
+            usave = np.concatenate((usave, u[1:-1, :, np.newaxis]), axis=2)
+            vsave = np.concatenate((vsave, v[1:-1, :, np.newaxis]), axis=2)
 
-        # --- Time marching --- #
+    if save_interval > 0:
+        tsave = np.asarray(tsave)
+        save_data["h"] = hsave
+        save_data["u"] = usave
+        save_data["v"] = vsave
+        save_data["t"] = tsave
+        save_data["phi"] = latlon_grid.phi
+        save_data["theta"] = latlon_grid.theta
 
-        n = 0
-        t = 0.0
-
-        while t < self.T:
-
-            # Update number of iterations
-            n += 1
-
-            # --- Compute timestep through CFL condition --- #
-
-            # Compute flux Jacobian eigenvalues
-            eigenx = (
-                np.maximum(
-                    np.absolute(self.u - np.sqrt(self.g * np.absolute(self.h))),
-                    np.maximum(
-                        np.absolute(self.u),
-                        np.absolute(self.u + np.sqrt(self.g * np.absolute(self.h))),
-                    ),
-                )
-            ).max()
-
-            eigeny = (
-                np.maximum(
-                    np.absolute(self.v - np.sqrt(self.g * np.absolute(self.h))),
-                    np.maximum(
-                        np.absolute(self.v),
-                        np.absolute(self.v + np.sqrt(self.g * np.absolute(self.h))),
-                    ),
-                )
-            ).max()
-
-            # Compute timestep
-            dtmax = np.minimum(self.dxmin / eigenx, self.dymin / eigeny)
-            self.dt = self.CFL * dtmax
-
-            # If needed, adjust timestep not to exceed final time
-            if t + self.dt > self.T:
-                self.dt = self.T - t
-                t = self.T
-            else:
-                t += self.dt
-
-            # --- Update solution --- #
-
-            hnew, unew, vnew = self.LaxWendroff(self.h, self.u, self.v)
-
-            # --- Update solution applying BCs --- #
-
-            self.h[:, 1:-1] = np.concatenate(
-                (hnew[-2:-1, :], hnew, hnew[1:2, :]), axis=0
-            )
-            self.h[:, 0] = self.h[:, 1]
-            self.h[:, -1] = self.h[:, -2]
-
-            self.u[:, 1:-1] = np.concatenate(
-                (unew[-2:-1, :], unew, unew[1:2, :]), axis=0
-            )
-            self.u[:, 0] = self.u[:, 1]
-            self.u[:, -1] = self.u[:, -2]
-
-            self.v[:, 1:-1] = np.concatenate(
-                (vnew[-2:-1, :], vnew, vnew[1:2, :]), axis=0
-            )
-            self.v[:, 0] = self.v[:, 1]
-            self.v[:, -1] = self.v[:, -2]
-
-            # --- Print and save --- #
-
-            if verbose > 0 and (n % verbose == 0):
-                norm = np.sqrt(self.u * self.u + self.v * self.v)
-                umax = norm.max()
-                print(
-                    "Time = %6.2f hours (max %i); max(|u|) = %16.16f"
-                    % (t / 3600.0, int(self.T / 3600.0), umax)
-                )
-
-            if save > 0 and (n % save == 0):
-                tsave = np.concatenate((tsave, np.array([[t]])), axis=0)
-                hsave = np.concatenate((hsave, self.h[1:-1, :, np.newaxis]), axis=2)
-                usave = np.concatenate((usave, self.u[1:-1, :, np.newaxis]), axis=2)
-                vsave = np.concatenate((vsave, self.v[1:-1, :, np.newaxis]), axis=2)
-
-        # --- Return --- #
-
-        if save > 0:
-            return tsave, self.phi, self.theta, hsave, usave, vsave
-        else:
-            return self.h, self.u, self.v
+    # --- Return --- #
+    return h, u, v
