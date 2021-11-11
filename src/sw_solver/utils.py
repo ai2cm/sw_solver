@@ -1,15 +1,14 @@
 """Miscellaneous utility methods and types."""
 
 from dataclasses import dataclass
-from typing import Type
 
 import numpy as np
 
-FloatT = Type[np.float64]
+FloatT = np.float64
 
-FloatArray1D = Type[np.ndarray]
-FloatArray2D = Type[np.ndarray]
-FloatArray3D = Type[np.ndarray]
+FloatArray1D = np.ndarray
+FloatArray2D = np.ndarray
+FloatArray3D = np.ndarray
 
 
 @dataclass(frozen=True)

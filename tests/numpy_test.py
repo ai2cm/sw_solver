@@ -38,8 +38,12 @@ def test_numpy():
 
     # --- RUN THE SOLVER --- #
 
-    pb = sw_solver.numpy.NumpySolver(T, M, N, IC, CFL, diffusion)
-    t, phi, theta, h, u, v = pb.solve_and_save(0, 500)
+    save_data = {"interval": 500}
+    sw_solver.numpy.solve(M, N, IC, T, CFL, diffusion, save_data=save_data)
+    # pb = sw_solver.numpy.NumpySolver(T, M, N, IC, CFL, diffusion)
+    # t, phi, theta, h, u, v = pb.solve_and_save(0, 500)
+    h, u, v, t = save_data["h"], save_data["u"], save_data["v"], save_data["t"]
+    phi, theta = save_data["phi"], save_data["theta"]
 
     # --- VALIDATE THE SOLUTION --- #
 

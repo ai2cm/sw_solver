@@ -3,21 +3,14 @@
 
 import pickle
 
+import sw_solver
+
 # --- SETTINGS --- #
-
-# Solver version:
-# 	* numpy (NumPy version)
-#   * gt4py (DSL version)
-version = "numpy"
-
-# Import
-if version == "numpy":
-    import sw_solver.numpy as SWES
 
 # Initial condition:
 # 	* 0: sixth test case of Williamson's suite
 # 	* 1: second test case of Williamson's suite
-IC = SWES.ICType.RossbyHaurwitzWave
+IC = sw_solver.ICType.RossbyHaurwitzWave
 
 # Simulation length (in days); better to use integer values.
 # Suggested simulation length for Williamson's test cases:
@@ -42,17 +35,18 @@ save = 500
 
 # --- RUN THE SOLVER --- #
 
-pb = SWES.NumpySolver(T, M, N, IC, CFL, diffusion)
-if save > 0:
-    t, phi, theta, h, u, v = pb.solve(verbose, save)
-else:
-    h, u, v = pb.solve(verbose, save)
+save_data = {"interval": save}
+sw_solver.numpy.solve(
+    M, N, IC, T, CFL, diffusion, save_data=save_data, print_interval=verbose
+)
+h, u, v, t = save_data["h"], save_data["u"], save_data["v"], save_data["t"]
+phi, theta = save_data["phi"], save_data["theta"]
 
 # --- STORE THE SOLUTION --- #
 
 if save > 0:
     baseName = "./data/swes-%s-%s-M%i-N%i-T%i-%i-" % (
-        version,
+        "numpy",
         str(IC),
         M,
         N,
