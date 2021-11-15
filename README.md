@@ -1,23 +1,8 @@
 # Simple shallow-water solver in NumPy and GT4Py
 
-## Build
+[![.github/workflows/ci.yml](https://github.com/ai2cm/sw_solver/actions/workflows/ci.yml/badge.svg)](https://github.com/ai2cm/sw_solver/actions/workflows/ci.yml)
 
-```bash
-make build
-```
+## Install
 
-## Run
-
-```bash
-make enter
-python driver.py
-```
-
-
-## Visualize
-
-```bash
-python animation.py
-```
-
-Open up the `*.mpg` file in the data directory to view the MPEG visualization.
+`sw_solver` uses the standard python packaging guidelines with `setuptools`,
+as such, it is installable via `pip` or plain `setup.py`.
