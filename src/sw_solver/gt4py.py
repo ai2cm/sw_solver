@@ -82,6 +82,36 @@ class StorageAllocator(metaclass=SingletonMeta):
         )
 
 
+# @gt4py.gtscript.function
+# def compute_laplacian(var, dx, dy):
+#     """Compute the diffusion term"""
+#     # a*, b*, c* are the centered, upwind, and downwind cofficients, respectively.
+
+#     ax = (dx[1, 0, 0] - dx) / (dx[1, 0, 0] * dx)
+#     bx = dx / dx[1, 0, 0] * (dx[1, 0, 0] + dx)
+#     cx = -dx[1, 0, 0] / dx * (dx[1, 0, 0] + dx)
+
+#     vxx_0 = ax * (
+#         ax[0, 0, 0] * var[0, 0, 0]
+#         + bx[0, 0, 0] * var[1, 0, 0]
+#         + cx[0, 0, 0] * var[-1, 0, 0]
+#     )
+#     vxx_u = bx * (
+#         ax[1, 0, 0] * var[1, 0, 0]
+#         + bx[1, 0, 0] * var[2, 0, 0]
+#         + cx[1, 0, 0] * var[0, 0, 0]
+#     )
+#     vxx_d = cx * (
+#         ax[-1, 0, 0] * var[-1, 0, 0]
+#         + bx[-1, 0, 0] * var[0, 0, 0]
+#         + cx[-1, 0, 0] * var[-2, 0, 0]
+#     )
+
+#     ay = (dy[0, 1, 0] - dy) / (dy[0, 1, 0] * dy)
+#     by = dy / dy[0, 1, 0] * (dy[0, 1, 0] + dy)
+#     cy = -dy[0, 1, 0] / dy * (dy[0, 1, 0] + dy)
+
+
 def lax_wendroff_definition(
     phi: Field[IJ, FloatT],
     theta: Field[IJ, FloatT],
@@ -265,6 +295,30 @@ def lax_wendroff_definition(
         )
 
 
+def _apply_bcs(q, qnew):
+    """
+    Apply boundary conditions to a quantity.
+
+    Parameters
+    ----------
+    q : FloatArray2D
+        Input quantity (this is modified).
+    qnew : FloatArray2D
+        Updated quantity.
+
+    Returns
+    -------
+    FloatArray2D
+        Quantity with boundary conditions applied.
+
+    """
+    q[:, 1:-1, :] = np.concatenate((qnew[-2:-1, :, :], qnew, qnew[1:2, :, :]), axis=0)
+    q[:, 0, :] = q[:, 1, :]
+    q[:, -1, :] = q[:, -2, :]
+
+    return q
+
+
 def solve(
     num_lon_pts: int,
     num_lat_pts: int,
@@ -340,9 +394,10 @@ def solve(
     # Note: currently just a flat surface
     hs = StorageAllocator().zeros(
         backend=gt4py_backend,
-        default_origin=(0, 0, 0),
+        default_origin=(1, 1),
         shape=latlon_grid.shape,
         dtype=FloatT,
+        mask=(True, True, False),
     )
 
     if not isinstance(ic_type, ICType):
@@ -356,75 +411,110 @@ def solve(
         StorageAllocator().from_array(
             x[:, :, np.newaxis],
             backend=gt4py_backend,
-            default_origin=(1, 0, 0),
+            default_origin=(1, 1, 0),
             shape=list(x.shape) + [1],
         )
         for x in (h_arr, u_arr, v_arr)
     )
 
     f = StorageAllocator().from_array(
-        f_arr, backend=gt4py_backend, default_origin=(1, 0), mask=(True, True, False)
+        f_arr, backend=gt4py_backend, default_origin=(1, 1), mask=(True, True, False)
+    )
+
+    h_new, u_new, v_new = (
+        StorageAllocator().zeros(
+            backend=gt4py_backend,
+            default_origin=(0, 0, 0),
+            shape=[s - 2 for s in var.shape[:-1]] + [var.shape[-1]],
+            dtype=FloatT,
+        )
+        for var in (h, u, v)
+    )
+
+    phi = StorageAllocator().from_array(
+        latlon_grid.phi,
+        backend=gt4py_backend,
+        default_origin=(1, 1),
+        mask=(True, True, False),
+    )
+    theta = StorageAllocator().from_array(
+        latlon_grid.theta,
+        backend=gt4py_backend,
+        default_origin=(1, 1),
+        mask=(True, True, False),
     )
 
     print(StorageAllocator().num_storages, StorageAllocator().total_bytes)
 
     # TODO: loop
+    num_steps = 0
     time = 0.0
 
-    # --- Compute timestep through CFL condition --- #
-    # Compute flux Jacobian eigenvalues
-    eigenx = (
-        np.maximum(
-            np.absolute(u - np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
+    while time < final_time:
+
+        num_steps += 1
+
+        # --- Compute timestep through CFL condition --- #
+        # Compute flux Jacobian eigenvalues
+        eigenx = (
             np.maximum(
-                np.absolute(u),
-                np.absolute(u + np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
-            ),
-        )
-    ).max()
+                np.absolute(u - np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
+                np.maximum(
+                    np.absolute(u),
+                    np.absolute(u + np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
+                ),
+            )
+        ).max()
 
-    eigeny = (
-        np.maximum(
-            np.absolute(v - np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
+        eigeny = (
             np.maximum(
-                np.absolute(v),
-                np.absolute(v + np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
-            ),
+                np.absolute(v - np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
+                np.maximum(
+                    np.absolute(v),
+                    np.absolute(v + np.sqrt(EARTH_CONSTANTS.g * np.absolute(h))),
+                ),
+            )
+        ).max()
+
+        # Compute timestep
+        dtmax = np.minimum(cart_grid.dxmin / eigenx, cart_grid.dymin / eigeny)
+        dt = courant * dtmax
+
+        lax_wendroff_update(
+            phi,
+            theta,
+            f,
+            hs,
+            h,
+            u,
+            v,
+            h_new,
+            u_new,
+            v_new,
+            EARTH_CONSTANTS.a,
+            EARTH_CONSTANTS.g,
+            dt,
         )
-    ).max()
 
-    # Compute timestep
-    dtmax = np.minimum(cart_grid.dxmin / eigenx, cart_grid.dymin / eigeny)
-    dt = courant * dtmax
+        if use_diffusion:
+            raise NotImplementedError("Diffusion term.")
 
-    h_new, u_new, v_new = (StorageAllocator().empty_like(var) for var in (h, u, v))
+        # --- Update solution applying BCs --- #
+        h = _apply_bcs(h, h_new)
+        u = _apply_bcs(u, u_new)
+        v = _apply_bcs(v, v_new)
 
-    phi = StorageAllocator().from_array(
-        latlon_grid.phi, backend=gt4py_backend, default_origin=(1, 0, 0)
-    )
-    theta = StorageAllocator().from_array(
-        latlon_grid.theta, backend=gt4py_backend, default_origin=(1, 0, 0)
-    )
+        # If needed, adjust timestep not to exceed final time
+        if time + dt > final_time:
+            dt = final_time - time
+            time = final_time
+        else:
+            time += dt
 
-    lax_wendroff_update(
-        phi,
-        theta,
-        f,
-        hs,
-        dt,
-        h,
-        u,
-        v,
-        EARTH_CONSTANTS.a,
-        EARTH_CONSTANTS.g,
-        h_new,
-        u_new,
-        v_new,
-    )
-
-    # If needed, adjust timestep not to exceed final time
-    if time + dt > final_time:
-        dt = final_time - time
-        time = final_time
-    else:
-        time += dt
+        # --- Print and save --- #
+        if print_interval > 0 and (num_steps % print_interval == 0):
+            norm = np.sqrt(u * u + v * v)
+            umax = norm.max()
+            print(
+                f"Time = {time / 3600.0:6.2f} hours (max {int(final_time / 3600.0)}); max(|u|) = {umax:16.16f}"
+            )

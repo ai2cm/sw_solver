@@ -33,9 +33,11 @@ def test_gt4py_lax_wendroff_numpy(ic_type: sw_solver.ICType):
     dt = 1.25
 
     # --- Update solution --- #
-    (h_new_np, u_new_np, v_new_np,) = sw_solver.numpy.lax_wendroff_update(
-        latlon_grid, cart_grid, None, dt, f, hs, h, u, v
-    )
+    (
+        h_new_np,
+        u_new_np,
+        v_new_np,
+    ) = sw_solver.numpy.lax_wendroff_update(latlon_grid, cart_grid, dt, f, hs, h, u, v)
 
     # --- gt4py ---
     gt4py_backend = "gtc:numpy"
@@ -52,9 +54,9 @@ def test_gt4py_lax_wendroff_numpy(ic_type: sw_solver.ICType):
 
     h_new_gt, u_new_gt, v_new_gt = (
         sw_solver.gt4py.StorageAllocator().zeros(
-            shape=var.shape,
-            default_origin=var.default_origin,
             backend=gt4py_backend,
+            shape=[s - 2 for s in var.shape[:-1]] + [var.shape[-1]],
+            default_origin=(0, 0, 0),
             dtype=var.dtype,
         )
         for var in (h_gt, u_gt, v_gt)
@@ -97,9 +99,8 @@ def test_gt4py_lax_wendroff_numpy(ic_type: sw_solver.ICType):
         EARTH_CONSTANTS.a,
         EARTH_CONSTANTS.g,
         dt,
-        # domain=(latlon_grid.phi.shape[0] - 2, latlon_grid.phi.shape[1] - 2, 1),
     )
-
-    assert np.allclose(h_new_np[1:-1, :-1], h_new_gt[2:-2, 1:-2, 0])
-    assert np.allclose(u_new_np[1:-1, :-1], u_new_gt[2:-2, 1:-2, 0])
-    assert np.allclose(v_new_np[1:-1, :-1], v_new_gt[2:-2, 1:-2, 0])
+    print(np.abs(u_new_np - u_new_gt[:, :, 0]) / u_new_np)
+    assert np.allclose(h_new_np, h_new_gt[:, :, 0])
+    assert np.allclose(u_new_np, u_new_gt[:, :, 0])
+    assert np.allclose(v_new_np, v_new_gt[:, :, 0])
