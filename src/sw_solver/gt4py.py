@@ -87,35 +87,35 @@ def lax_wendroff_definition(
     theta: Field[IJ, FloatT],
     f: Field[IJ, FloatT],
     hs: Field[IJ, FloatT],
-    dt: FloatT,
     h: Field[IJK, FloatT],
     u: Field[IJK, FloatT],
     v: Field[IJK, FloatT],
-    const_a: FloatT,
-    const_g: FloatT,
     h_new: Field[IJK, FloatT],
     u_new: Field[IJK, FloatT],
     v_new: Field[IJK, FloatT],
+    const_a: FloatT,
+    const_g: FloatT,
+    dt: FloatT,
 ):
     """Definition of the Lax-Wendroff finite difference coupled update."""
     with computation(PARALLEL), interval(...):
         # Compute grid variables
 
-        # Latitude-Longitude Grid
+        # # Latitude-Longitude Grid
         grid_c = cos(theta)
         grid_tg = tan(theta)
-        c_mid_y = cos(0.5 * (theta + theta[0, 1]))
-        tg_mid_x = tan(0.5 * (theta[0, 0] + theta[1, 0]))
-        tg_mid_y = tan(0.5 * (theta[0, 0] + theta[1, 0]))
+        c_mid_y = cos(0.5 * (theta + theta[0, -1]))
+        tg_mid_x = tan(0.5 * (theta[-1, 0] + theta))
+        tg_mid_y = tan(0.5 * (theta[0, -1] + theta))
 
-        # Cartesian Grid
+        # # Cartesian Grid
         x = const_a * cos(theta) * phi
         y = const_a * theta
         y1 = const_a * sin(theta)
 
-        dx = x[1, 0, 0] - x
-        dy = y[0, 1, 0] - y
-        dy1 = y1[0, 1, 0] - y1
+        dx = x - x[-1, 0, 0]
+        dy = y - y[0, -1, 0]
+        dy1 = y1 - y1[0, -1, 0]
 
         dxc = 0.5 * (dx + dx[1, 0, 0])
         dyc = 0.5 * (dy + dy[0, 1, 0])
@@ -128,56 +128,63 @@ def lax_wendroff_definition(
         hv1 = h * v1
 
         # --- Compute mid-point values after half timestep --- #
-        h_mid_x = 0.5 * (h[1, 0, 0] + h) - 0.5 * (dt / dx) * (hu[1, 0, 0] - hu)
-        h_mid_y = 0.5 * (h[0, 1, 0] + h) - 0.5 * (dt / dy1) * (hv1[0, 1, 0] - hu)
+        h_mid_x = 0.5 * (h + h[-1, 0, 0]) - 0.5 * (dt / dx) * (hu - hu[-1, 0, 0])
+        h_mid_y = 0.5 * (h + h[0, -1, 0]) - 0.5 * (dt / dy1) * (hv1 - hv1[0, -1, 0])
 
         # Mid-point value for hu along x
         ux = hu * u + 0.5 * const_g * h * h
         hu_mid_x = (
-            0.5 * (hu[1, 0, 0] + hu)
-            - 0.5 * dt / dx * (ux[1, 0, 0] - ux)
+            0.5 * (hu + hu[-1, 0, 0])
+            - 0.5 * dt / dx * (ux - ux[-1, 0, 0])
             + 0.5
             * dt
-            * (0.5 * (f[1, 0] + f) + 0.5 * (u[1, 0, 0] + u) * tg_mid_x / const_a)
-            * (0.5 * (hv[1, 0, 0] + hv))
+            * (0.5 * (f + f[-1, 0]) + 0.5 * (u + u[-1, 0, 0]) * tg_mid_x / const_a)
+            * (0.5 * (hv + hv[-1, 0, 0]))
         )
 
         # Mid-point value for hu along y
         uy = hu * v1
         hu_mid_y = (
-            0.5 * (hu[0, 1, 0] + hv)
-            - 0.5 * dt / dx * (uy[0, 1, 0] - uy)
+            0.5 * (hu + hu[0, -1, 0])
+            - 0.5 * dt / dy1 * (uy - uy[0, -1, 0])
             + 0.5
             * dt
-            * (0.5 * (f[0, 1] + f) + 0.5 * (u[0, 1, 0] + u) * tg_mid_y / const_a)
-            * (0.5 * (hv[0, 1, 0] + hv))
+            * (0.5 * (f + f[0, -1]) + 0.5 * (u + u[0, -1, 0]) * tg_mid_y / const_a)
+            * (0.5 * (hv + hv[0, -1, 0]))
         )
 
         # Mid-point value for hv along x
         vx = hu * v
         hv_mid_x = (
-            0.5 * (hv[1, 0, 0] + hv)
-            - 0.5 * dt / dx * (vx[1, 0, 0] - vx)
+            0.5 * (hv + hv[-1, 0, 0])
+            - 0.5 * dt / dx * (vx - vx[-1, 0, 0])
             - 0.5
             * dt
-            * (0.5 * (f[1, 0] + f) + 0.5 * (u[1, 0, 0] + u) * tg_mid_x / const_a)
-            * (0.5 * (hu[1, 0, 0] + hu))
+            * (0.5 * (f + f[-1, 0]) + 0.5 * (u + u[-1, 0, 0]) * tg_mid_x / const_a)
+            * (0.5 * (hu + hu[-1, 0, 0]))
         )
 
         # Mid-point value for hv along y
         vy1 = hv * v1
         vy2 = 0.5 * const_g * h * h
         hv_mid_y = (
-            0.5 * (hv[0, 1, 0] + hv)
-            - 0.5 * dt / dy1 * (vy1[0, 1, 0] - vy1)
-            - 0.5 * dt / dy * (vy2[0, 1, 0] - vy2)
+            0.5 * (hv + hv[0, -1, 0])
+            - 0.5 * dt / dy1 * (vy1 - vy1[0, -1, 0])
+            - 0.5 * dt / dy * (vy2 - vy2[0, -1, 0])
             - 0.5
             * dt
-            * (0.5 * (f[0, 1] + f) + 0.5 * (u[0, 1, 0] + u) * tg_mid_y / const_a)
-            * (0.5 * (hu[0, 1, 0] + hu))
+            * (0.5 * (f + f[0, -1]) + 0.5 * (u + u[0, -1, 0]) * tg_mid_y / const_a)
+            * (0.5 * (hu + hu[0, -1, 0]))
         )
 
         # --- Compute solution at next timestep --- #
+
+        # # Update fluid height
+        h_new = (
+            h
+            - dt / dxc * (hu_mid_x[1, 0, 0] - hu_mid_x)
+            - dt / dy1c * (hv_mid_y[0, 1, 0] * c_mid_y[0, 1, 0] - hv_mid_y * c_mid_y)
+        )
 
         f_update = (
             f
@@ -190,13 +197,6 @@ def lax_wendroff_definition(
             )
             * grid_tg
             / const_a
-        )
-
-        # Update fluid height
-        h_new = (
-            h
-            - dt / dxc * (hu_mid_x[1, 0, 0] - hu_mid_x)
-            - dt / dy1c * (hv_mid_y[0, 1, 0] * c_mid_y[0, 1, 0] - hv_mid_y * c_mid_y)
         )
 
         # Update longitudinal moment
@@ -223,7 +223,7 @@ def lax_wendroff_definition(
             * const_g
             * 0.25
             * (h_mid_x + h_mid_x[1, 0, 0] + h_mid_y + h_mid_y[0, 1, 0])
-            * (hs[2, 0] - hs)
+            * (hs[1, 0] - hs[-1, 0])
             / (dx + dx[1, 0, 0])
         )
 
@@ -252,11 +252,11 @@ def lax_wendroff_definition(
             * const_g
             * 0.25
             * (h_mid_x + h_mid_x[1, 0, 0] + h_mid_y + h_mid_y[0, 1, 0])
-            * (hs[0, 2] - hs)
-            / (dy1 + dy1[1, 0, 0])
+            * (hs[0, 1] - hs[0, -1])
+            / (dy1 + dy1[0, 1, 0])
         )
 
-        # Come back to original variables
+        # # Come back to original variables
         u_new = (  # noqa: F841 local variable 'u_new' is assigned to but never used
             hu_new / h_new
         )
