@@ -40,26 +40,26 @@ def test_gt4py_lax_wendroff_numpy(ic_type: sw_solver.ICType):
     ) = sw_solver.numpy.lax_wendroff_update(latlon_grid, cart_grid, dt, f, hs, h, u, v)
 
     # --- gt4py ---
-    gt4py_backend = "gtc:numpy"
+    gt4py_backend = "gtc:gt:cpu_kfirst"
+    nk_levels = 1
 
     h_gt, u_gt, v_gt = (
         sw_solver.gt4py.StorageAllocator().from_array(
-            arr[:, :, np.newaxis],
+            np.repeat(arr[:, :, np.newaxis], nk_levels, axis=2),
             backend=gt4py_backend,
             default_origin=(1, 1, 0),
-            shape=list(arr.shape) + [1],
         )
         for arr in (h_0, u_0, v_0)
     )
 
     h_new_gt, u_new_gt, v_new_gt = (
         sw_solver.gt4py.StorageAllocator().zeros(
+            shape=list(var.shape) + [nk_levels],
             backend=gt4py_backend,
-            shape=[s - 2 for s in var.shape[:-1]] + [var.shape[-1]],
             default_origin=(0, 0, 0),
             dtype=var.dtype,
         )
-        for var in (h_gt, u_gt, v_gt)
+        for var in (h_new_np, u_new_np, v_new_np)
     )
 
     f_gt = sw_solver.gt4py.StorageAllocator().from_array(
@@ -74,7 +74,9 @@ def test_gt4py_lax_wendroff_numpy(ic_type: sw_solver.ICType):
     )
 
     lax_wendroff_stencil = gt4py.gtscript.stencil(
-        definition=sw_solver.gt4py.lax_wendroff_definition, backend=gt4py_backend
+        definition=sw_solver.gt4py.lax_wendroff_definition,
+        backend=gt4py_backend,
+        oir_pipeline=sw_solver.gt4py.oir_pipeline,
     )
 
     hs_gt = sw_solver.gt4py.StorageAllocator().from_array(
@@ -99,6 +101,7 @@ def test_gt4py_lax_wendroff_numpy(ic_type: sw_solver.ICType):
         EARTH_CONSTANTS.a,
         EARTH_CONSTANTS.g,
         dt,
+        domain=h_new_gt.shape,
     )
     print(np.abs(u_new_np - u_new_gt[:, :, 0]) / u_new_np)
     assert np.allclose(h_new_np, h_new_gt[:, :, 0])
