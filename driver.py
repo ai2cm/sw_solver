@@ -5,6 +5,7 @@ import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 
 import sw_solver
+import numpy as np
 
 IC = sw_solver.ICType.RossbyHaurwitzWave
 
@@ -28,9 +29,13 @@ h, u, v, t = save_data["h"], save_data["u"], save_data["v"], save_data["t"]
 phi, theta = save_data["phi"], save_data["theta"]
 
 fig = plt.figure(figsize=(10, 5))
-ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-
-ax.contourf(phi[1:-1, :], theta[1:-1, :], u[:, :, -1])
+ax = fig.add_subplot(1, 1, 1, projection=ccrs.Robinson())
+lon = phi[1:-1, :] * 180.0 / np.pi
+lat = theta[1:-1, :] * 180.0 / np.pi
+im = ax.contourf(lon, lat, u[:, :, -1], transform=ccrs.Robinson())
+cbar = plt.colorbar(im, orientation="horizontal", shrink=0.75)
+cbar.set_label("u [m/s]")
+plt.grid()
 plt.show()
 
 # Numpy serialized data:
