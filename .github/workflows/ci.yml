@@ -25,7 +25,7 @@ jobs:
           # setup.cfg, pyproject.toml, and .pre-commit-config.yaml have
           # versioning info that would impact the tox environment. hashFiles
           # only takes a single file path or pattern at the moment.
-          key: ${{ runner.os }}-${{ matrix.python }}-tox-${{ hashFiles('setup.cfg') }}-${{ hashFiles('pyproject.toml') }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          key: ${{ runner.os }}-${{ matrix.python }}-tox-${{ hashFiles('setup.cfg') }}-${{ hashFiles('setup.py') }}-${{ hashFiles('.pre-commit-config.yaml') }}
       # Build a virtualenv, but only if it doesn't already exist
       - name: Run tox
         run: tox
