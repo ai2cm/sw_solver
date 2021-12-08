@@ -15,16 +15,13 @@ from gt4py.gtscript import (
     sin,
     tan,
 )
-from gtc.passes.oir_dace_optimizations.horizontal_execution_merging import (
-    graph_merge_horizontal_executions,
-)
 from gtc.passes.oir_pipeline import DefaultPipeline
 
 from .grid import CartesianGrid, LatLonGrid
 from .ic import ICType, get_initial_conditions
 from .utils import EARTH_CONSTANTS, FloatT
 
-oir_pipeline = DefaultPipeline(skip=[graph_merge_horizontal_executions])
+oir_pipeline = DefaultPipeline(skip=DefaultPipeline.all_steps())
 
 
 class SingletonMeta(type):

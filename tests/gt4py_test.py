@@ -40,7 +40,7 @@ def test_gt4py_lax_wendroff_numpy(ic_type: sw_solver.ICType):
     ) = sw_solver.numpy.lax_wendroff_update(latlon_grid, cart_grid, dt, f, hs, h, u, v)
 
     # --- gt4py ---
-    gt4py_backend = "gtc:gt:cpu_kfirst"
+    gt4py_backend = "gtc:numpy"
     nk_levels = 1
 
     h_gt, u_gt, v_gt = (
@@ -103,7 +103,7 @@ def test_gt4py_lax_wendroff_numpy(ic_type: sw_solver.ICType):
         dt,
         domain=h_new_gt.shape,
     )
-    print(np.abs(u_new_np - u_new_gt[:, :, 0]) / u_new_np)
+
     assert np.allclose(h_new_np, h_new_gt[:, :, 0])
     assert np.allclose(u_new_np, u_new_gt[:, :, 0])
     assert np.allclose(v_new_np, v_new_gt[:, :, 0])
