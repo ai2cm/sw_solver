@@ -1,9 +1,11 @@
 """GT4Py version of the SWES solver."""
 
-from typing import Any, Dict, Optional, Type
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import gt4py
+import gt4py.storage as gt_storage
 import numpy as np
+from gt4py import gtscript
 from gt4py.gtscript import (
     IJ,
     IJK,
@@ -21,73 +23,132 @@ from .grid import CartesianGrid, LatLonGrid
 from .ic import ICType, get_initial_conditions
 from .utils import EARTH_CONSTANTS, FloatT
 
-oir_pipeline = DefaultPipeline(skip=DefaultPipeline.all_steps())
+DEFAULT_BACKEND = "gtc:numpy"
 
 
-class SingletonMeta(type):
-    """Singleton Metaclass."""
+def _default_origin_and_mask(
+    axes: Union[gtscript.Axis, Tuple[gtscript.Axis, ...]],
+    default_origin: Optional[Tuple[int, ...]] = None,
+) -> Tuple[Tuple[int, ...], Tuple[bool, bool, bool]]:
+    if axes == gtscript.IJK:
+        default_origin = default_origin or (0, 0, 0)
+        mask = (True, True, True)
+    elif axes == gtscript.IJ:
+        default_origin = default_origin or (0, 0)
+        mask = (True, True, False)
+    else:
+        raise NotImplementedError(f"Unrecognized axes: {axes}")
 
-    _instances: Dict[Type["SingletonMeta"], Any] = {}
-
-    def __call__(  # noqa: D102  # Missing docstring in public method
-        cls, *args, **kwargs
-    ):
-        if cls not in cls._instances:
-            instance = super().__call__(*args, **kwargs)
-            cls._instances[cls] = instance
-        return cls._instances[cls]
+    return default_origin, mask
 
 
-class StorageAllocator(metaclass=SingletonMeta):
-    """Memory tracker."""
+def _num_axes_to_gtscript(
+    num_axes: int,
+) -> Union[gtscript.Axis, Tuple[gtscript.Axis, ...]]:
+    if num_axes == 3:
+        return gtscript.IJK
+    elif num_axes == 2:
+        return gtscript.IJ
+    else:
+        raise NotImplementedError(f"Unrecognized number of axes: {num_axes}")
 
-    def __init__(self):
-        self.num_storages = {num_dim: 0 for num_dim in range(1, 4)}
-        self.total_bytes: int = 0
 
-    def _add_storage(self, storage: gt4py.storage.Storage):
-        num_axes = sum(storage.mask)
-        self.num_storages[num_axes] += 1
-        self.total_bytes += np.prod(storage.shape) * np.dtype(storage.dtype).itemsize
-        return storage
+def make_storage_from_shape(
+    shape: Tuple[int, ...],
+    dtype: Any = FloatT,
+    backend: str = DEFAULT_BACKEND,
+    default_origin: Optional[Tuple[int, ...]] = None,
+    axes: Optional[Union[gtscript.Axis, Tuple[gtscript.Axis, ...]]] = None,
+) -> gt_storage.Storage:
+    """Create gt4py storage from a given shape.
 
-    def ones(self, backend, default_origin, shape, dtype, mask=None):
-        """Wrap gt4py.storage.ones."""
-        return self._add_storage(
-            gt4py.storage.ones(backend, default_origin, shape, dtype, mask)
-        )
+    Parameters
+    ----------
+    shape : tuple
+        Tuple of integers indicating the size of each axis.
+    dtype : np.dtype
+        Data type of each element.
+    backend : str, optional
+        String describing the gt4py backend.
+    default_origin : tuple, optional
+        Data index mapping to the origin of the stencil compute domain.
+    axes
+        The gtscript Axis definition.
 
-    def zeros(self, backend, default_origin, shape, dtype, mask=None):
-        """Wrap gt4py.storage.zeros."""
-        return self._add_storage(
-            gt4py.storage.zeros(backend, default_origin, shape, dtype, mask)
-        )
+    Returns
+    -------
+    gt_storage.Storage
+        The resulting gt4py storage.
 
-    def from_array(self, data, backend, default_origin, shape=None, mask=None):
-        """Wrap gt4py.storage.from_array."""
-        shape = shape or data.shape
-        return self._add_storage(
-            gt4py.storage.from_array(
-                data, backend, default_origin, shape, data.dtype, mask
-            )
-        )
+    """
+    axes = axes or _num_axes_to_gtscript(len(shape))
+    default_origin, mask = _default_origin_and_mask(axes, default_origin)
 
-    def empty_like(self, storage):
-        """Wrap gt4py.storage.empty."""
-        return self._add_storage(
-            gt4py.storage.empty(
-                storage.backend,
-                storage.default_origin,
-                storage.shape,
-                storage.dtype,
-                storage.mask,
-            )
-        )
+    return gt_storage.empty(backend, default_origin, shape, dtype, mask=mask)
+
+
+def make_storage_from_array(
+    data: Any,
+    backend: str = DEFAULT_BACKEND,
+    default_origin: Optional[Tuple[int, ...]] = None,
+    axes: Optional[Union[gtscript.Axis, Tuple[gtscript.Axis, ...]]] = None,
+) -> gt_storage.Storage:
+    """Create gt4py storage from an existing data array.
+
+    Wrapper around gt_storage.make_storage_from_array. Will copy the storage if using
+    a GPU backend and a numpy data array is given.
+
+    Parameters
+    ----------
+    data :
+        Input data array, follows buffer protocol.
+    backend : str, optional
+        String describing the gt4py backend.
+    default_origin : tuple, optional
+        Data index mapping to the origin of the stencil compute domain.
+    axes
+        The gtscript Axis definition.
+
+    Returns
+    -------
+    gt_storage.Storage
+        The resulting gt4py storage.
+
+    """
+    axes = axes or _num_axes_to_gtscript(data.ndim)
+    default_origin, mask = _default_origin_and_mask(axes, default_origin)
+
+    return gt_storage.from_array(
+        data, backend, default_origin, shape=data.shape, dtype=data.dtype, mask=mask
+    )
+
+
+def make_stencil(definition: Callable[..., None], **kwargs: Any) -> gt4py.StencilObject:
+    """Wrap around gtscript.Stencil.
+
+    Parameters
+    ----------
+    definition : func
+        The gtscript stencil definition
+    **kwargs
+        Arbitrary keyword arguments.
+
+    Returns
+    -------
+    gt4py.StencilObject
+        The resulting stencil.
+
+    """
+    kwargs.setdefault("oir_pipeline", DefaultPipeline(skip=DefaultPipeline.all_steps()))
+    kwargs.setdefault("backend", "gtc:numpy")
+    kwargs.setdefault("externals", {"USE_DIFFUSION": False})
+
+    return gt4py.gtscript.stencil(definition=definition, **kwargs)
 
 
 # @gt4py.gtscript.function
 # def compute_laplacian(var, dx, dy):
-#     """Compute the diffusion term"""
+#     """Compute the diffusion term."""
 #     # a*, b*, c* are the centered, upwind, and downwind cofficients, respectively.
 
 #     ax = (dx[1, 0, 0] - dx) / (dx[1, 0, 0] * dx)
@@ -395,7 +456,7 @@ def solve(
     final_time = hours_per_day * seconds_per_hour * sim_days
 
     # Note: currently just a flat surface
-    hs = StorageAllocator().zeros(
+    hs = gt_storage.zeros(
         backend=gt4py_backend,
         default_origin=(1, 1),
         shape=latlon_grid.shape,
@@ -411,7 +472,7 @@ def solve(
     h_arr, u_arr, v_arr, f_arr = get_initial_conditions(ic_type, latlon_grid)
 
     h, u, v = (
-        StorageAllocator().from_array(
+        gt_storage.from_array(
             x[:, :, np.newaxis],
             backend=gt4py_backend,
             default_origin=(1, 1, 0),
@@ -420,12 +481,12 @@ def solve(
         for x in (h_arr, u_arr, v_arr)
     )
 
-    f = StorageAllocator().from_array(
+    f = gt_storage.from_array(
         f_arr, backend=gt4py_backend, default_origin=(1, 1), mask=(True, True, False)
     )
 
     h_new, u_new, v_new = (
-        StorageAllocator().zeros(
+        gt_storage.zeros(
             backend=gt4py_backend,
             default_origin=(0, 0, 0),
             shape=[s - 2 for s in var.shape[:-1]] + [var.shape[-1]],
@@ -434,20 +495,18 @@ def solve(
         for var in (h, u, v)
     )
 
-    phi = StorageAllocator().from_array(
+    phi = gt_storage.from_array(
         latlon_grid.phi,
         backend=gt4py_backend,
         default_origin=(1, 1),
         mask=(True, True, False),
     )
-    theta = StorageAllocator().from_array(
+    theta = gt_storage.from_array(
         latlon_grid.theta,
         backend=gt4py_backend,
         default_origin=(1, 1),
         mask=(True, True, False),
     )
-
-    print(StorageAllocator().num_storages, StorageAllocator().total_bytes)
 
     num_steps = 0
     time = 0.0

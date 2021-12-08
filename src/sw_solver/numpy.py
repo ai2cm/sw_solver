@@ -28,7 +28,7 @@ class DiffusionCoefficients:
         """Compute the coefficients."""
         # Centered finite difference along longitude
         # Ax, Bx and Cx denote the coefficients associated
-        # to the centred, upwind and downwind point, respectively
+        # to the centered, upwind and downwind point, respectively
         Ax = (cart_grid.dx[1:, 1:-1] - cart_grid.dx[:-1, 1:-1]) / (
             cart_grid.dx[1:, 1:-1] * cart_grid.dx[:-1, 1:-1]
         )
@@ -415,7 +415,7 @@ def solve(
     use_diffusion: bool = True,
     save_data: Optional[Dict[str, Any]] = None,
     print_interval: int = -1,
-):
+) -> Tuple[FloatArray2D, FloatArray2D, FloatArray2D]:
     """
     Numpy implementation of the SWES solver.
 
