@@ -146,34 +146,72 @@ def make_stencil(definition: Callable[..., None], **kwargs: Any) -> gt4py.Stenci
     return gt4py.gtscript.stencil(definition=definition, **kwargs)
 
 
-# @gt4py.gtscript.function
-# def compute_laplacian(var, dx, dy):
-#     """Compute the diffusion term."""
-#     # a*, b*, c* are the centered, upwind, and downwind cofficients, respectively.
+def laplacian_definition(
+    phi: Field[IJ, FloatT],
+    theta: Field[IJ, FloatT],
+    var: Field[IJK, FloatT],
+    lap_var: Field[IJK, FloatT],
+    const_a: FloatT,
+):
+    """Compute the diffusion term."""
+    # a*, b*, c* are the centered, upwind, and downwind cofficients, respectively.
 
-#     ax = (dx[1, 0, 0] - dx) / (dx[1, 0, 0] * dx)
-#     bx = dx / dx[1, 0, 0] * (dx[1, 0, 0] + dx)
-#     cx = -dx[1, 0, 0] / dx * (dx[1, 0, 0] + dx)
+    with computation(PARALLEL), interval(...):
+        x = const_a * cos(theta) * phi
+        y = const_a * theta
 
-#     vxx_0 = ax * (
-#         ax[0, 0, 0] * var[0, 0, 0]
-#         + bx[0, 0, 0] * var[1, 0, 0]
-#         + cx[0, 0, 0] * var[-1, 0, 0]
-#     )
-#     vxx_u = bx * (
-#         ax[1, 0, 0] * var[1, 0, 0]
-#         + bx[1, 0, 0] * var[2, 0, 0]
-#         + cx[1, 0, 0] * var[0, 0, 0]
-#     )
-#     vxx_d = cx * (
-#         ax[-1, 0, 0] * var[-1, 0, 0]
-#         + bx[-1, 0, 0] * var[0, 0, 0]
-#         + cx[-1, 0, 0] * var[-2, 0, 0]
-#     )
+        dx = x - x[-1, 0, 0]
+        dy = y - y[0, -1, 0]
 
-#     ay = (dy[0, 1, 0] - dy) / (dy[0, 1, 0] * dy)
-#     by = dy / dy[0, 1, 0] * (dy[0, 1, 0] + dy)
-#     cy = -dy[0, 1, 0] / dy * (dy[0, 1, 0] + dy)
+        ax = (dx[1, 0, 0] - dx) / (dx[1, 0, 0] * dx)
+        bx = dx / dx[1, 0, 0] * (dx[1, 0, 0] + dx)
+        cx = -dx[1, 0, 0] / dx * (dx[1, 0, 0] + dx)
+
+        vxx_0 = ax * (
+            ax[0, 0, 0] * var[0, 0, 0]
+            + bx[0, 0, 0] * var[1, 0, 0]
+            + cx[0, 0, 0] * var[-1, 0, 0]
+        )
+        vxx_u = bx * (
+            ax[1, 0, 0] * var[1, 0, 0]
+            + bx[1, 0, 0] * var[2, 0, 0]
+            + cx[1, 0, 0] * var[0, 0, 0]
+        )
+        vxx_d = cx * (
+            ax[-1, 0, 0] * var[-1, 0, 0]
+            + bx[-1, 0, 0] * var[0, 0, 0]
+            + cx[-1, 0, 0] * var[-2, 0, 0]
+        )
+
+        vxx = (  # noqa: F841  # local variable 'vxx' is assigned to but never used
+            vxx_0 + vxx_u + vxx_d
+        )
+
+        ay = (dy[0, 1, 0] - dy) / (dy[0, 1, 0] * dy)
+        by = dy / dy[0, 1, 0] * (dy[0, 1, 0] + dy)
+        cy = -dy[0, 1, 0] / dy * (dy[0, 1, 0] + dy)
+
+        vyy_0 = ay * (
+            ay[0, 0, 0] * var[0, 0, 0]
+            + by[0, 0, 0] * var[0, 1, 0]
+            + cy[0, 0, 0] * var[0, -1, 0]
+        )
+        vyy_u = by * (
+            ay[0, 1, 0] * var[0, 1, 0]
+            + by[0, 1, 0] * var[0, 2, 0]
+            + cy[0, 1, 0] * var[0, 0, 0]
+        )
+        vyy_d = cy * (
+            ay[0, -1, 0] * var[0, -1, 0]
+            + by[0, -1, 0] * var[0, 0, 0]
+            + cy[0, -1, 0] * var[0, -2, 0]
+        )
+
+        vyy = (  # noqa: F841  # local variable 'vyy' is assigned to but never used
+            vyy_0 + vyy_u + vyy_d
+        )
+
+        lap_var = vxx_d  # noqa: F841  # local variable 'lap_var' is assigned to but never used
 
 
 def lax_wendroff_definition(
@@ -383,6 +421,26 @@ def _apply_bcs(q, qnew):
     return q
 
 
+def _extend_storage(
+    quantity: gt_storage.Storage, extended: gt_storage.Storage
+) -> gt_storage.Storage:
+    for k in range(quantity.shape[2]):
+        extended_data = np.concatenate(
+            (
+                quantity.data[-4:-3, :, k],
+                quantity.data[:, :, k],
+                quantity.data[3:4, :, k],
+            ),
+            axis=0,
+        )
+        extended_data = np.concatenate(
+            (extended_data[:, 0:1], extended_data, extended_data[:, -1:]), axis=1
+        )
+        extended[:, :, k] = extended_data[:, :]
+
+    return extended
+
+
 def solve(
     num_lon_pts: int,
     num_lat_pts: int,
@@ -393,6 +451,7 @@ def solve(
     save_data: Optional[Dict[str, Any]] = None,
     print_interval: int = -1,
     gt4py_backend: str = "gtc:numpy",
+    nk_levels: int = 1,
 ):
     """
     Numpy implementation of the SWES solver.
@@ -425,6 +484,8 @@ def solve(
         every 'verbose' timesteps.
     gt4py_backend : str
         Stencil backend.
+    nk_levels : int
+        Number of vertical levels.
 
     Notes
     -----
@@ -439,11 +500,14 @@ def solve(
     - v : latitudinal fluid velocity
 
     """
-    lax_wendroff_update = gt4py.gtscript.stencil(
-        definition=lax_wendroff_definition, backend=gt4py_backend
-    )
-    if save_data is None:
-        save_data = {}
+
+    def stencilize(definition):
+        return make_stencil(definition=definition, backend=gt4py_backend)
+
+    lax_wendroff_update = stencilize(lax_wendroff_definition)
+    compute_laplacian = stencilize(laplacian_definition)
+
+    save_data = save_data or {}
 
     latlon_grid = LatLonGrid(num_lon_pts, num_lat_pts)
     cart_grid = CartesianGrid(latlon_grid)
@@ -455,14 +519,14 @@ def solve(
     seconds_per_hour: int = 3600
     final_time = hours_per_day * seconds_per_hour * sim_days
 
+    def storage_from_array(*args, **kwargs):
+        return make_storage_from_array(*args, **kwargs, backend=gt4py_backend)
+
+    def storage_from_shape(*args, **kwargs):
+        return make_storage_from_shape(*args, **kwargs, backend=gt4py_backend)
+
     # Note: currently just a flat surface
-    hs = gt_storage.zeros(
-        backend=gt4py_backend,
-        default_origin=(1, 1),
-        shape=latlon_grid.shape,
-        dtype=FloatT,
-        mask=(True, True, False),
-    )
+    hs = storage_from_shape(latlon_grid.shape, default_origin=(1, 1))
 
     if not isinstance(ic_type, ICType):
         raise TypeError(
@@ -471,41 +535,35 @@ def solve(
 
     h_arr, u_arr, v_arr, f_arr = get_initial_conditions(ic_type, latlon_grid)
 
+    save_interval: int = save_data.get("interval", 0)
+
+    if save_interval > 0:
+        tsave = [0.0]
+        hsave = h_arr[1:-1, :, np.newaxis].copy()
+        usave = u_arr[1:-1, :, np.newaxis].copy()
+        vsave = v_arr[1:-1, :, np.newaxis].copy()
+
     h, u, v = (
-        gt_storage.from_array(
-            x[:, :, np.newaxis],
-            backend=gt4py_backend,
-            default_origin=(1, 1, 0),
-            shape=list(x.shape) + [1],
-        )
+        storage_from_array(np.tile(x, (1, 1, nk_levels)), default_origin=(1, 1, 0))
         for x in (h_arr, u_arr, v_arr)
     )
 
-    f = gt_storage.from_array(
-        f_arr, backend=gt4py_backend, default_origin=(1, 1), mask=(True, True, False)
-    )
+    f = storage_from_array(f_arr, default_origin=(1, 1))
 
     h_new, u_new, v_new = (
-        gt_storage.zeros(
-            backend=gt4py_backend,
-            default_origin=(0, 0, 0),
-            shape=[s - 2 for s in var.shape[:-1]] + [var.shape[-1]],
-            dtype=FloatT,
-        )
+        storage_from_shape([s - 2 for s in var.shape[:-1]] + [var.shape[-1]])
         for var in (h, u, v)
     )
 
-    phi = gt_storage.from_array(
-        latlon_grid.phi,
-        backend=gt4py_backend,
-        default_origin=(1, 1),
-        mask=(True, True, False),
+    extended = storage_from_shape(
+        [s + 2 for s in h.shape[:-1]] + [h.shape[-1]], default_origin=(2, 2, 0)
     )
-    theta = gt_storage.from_array(
-        latlon_grid.theta,
-        backend=gt4py_backend,
-        default_origin=(1, 1),
-        mask=(True, True, False),
+
+    lap_var = storage_from_shape(h_new.shape)
+
+    phi, theta = (
+        storage_from_array(var, default_origin=(1, 1))
+        for var in (latlon_grid.phi, latlon_grid.theta)
     )
 
     num_steps = 0
@@ -557,7 +615,17 @@ def solve(
         )
 
         if use_diffusion:
-            raise NotImplementedError("Diffusion term.")
+            extended = _extend_storage(h, extended)
+            compute_laplacian(phi, theta, extended, lap_var, EARTH_CONSTANTS.a)
+            h_new += dt * EARTH_CONSTANTS.nu * lap_var
+
+            extended = _extend_storage(u, extended)
+            compute_laplacian(phi, theta, extended, lap_var, EARTH_CONSTANTS.a)
+            u_new += dt * EARTH_CONSTANTS.nu * lap_var
+
+            extended = _extend_storage(v, extended)
+            compute_laplacian(phi, theta, extended, lap_var, EARTH_CONSTANTS.a)
+            v_new += dt * EARTH_CONSTANTS.nu * lap_var
 
         # --- Update solution applying BCs --- #
         h = _apply_bcs(h, h_new)
@@ -578,3 +646,21 @@ def solve(
             print(
                 f"Time = {time / 3600.0:6.2f} hours (max {int(final_time / 3600.0)}); max(|u|) = {umax:16.16f}"
             )
+
+        if save_interval > 0 and (num_steps % save_interval == 0):
+            tsave.append(time)
+            hsave = np.concatenate((hsave, h[1:-1, :, np.newaxis]), axis=2)
+            usave = np.concatenate((usave, u[1:-1, :, np.newaxis]), axis=2)
+            vsave = np.concatenate((vsave, v[1:-1, :, np.newaxis]), axis=2)
+
+    if save_interval > 0:
+        tsave = np.asarray(tsave)
+        save_data["h"] = hsave
+        save_data["u"] = usave
+        save_data["v"] = vsave
+        save_data["t"] = tsave
+        save_data["phi"] = latlon_grid.phi
+        save_data["theta"] = latlon_grid.theta
+
+    # --- Return --- #
+    return h, u, v
