@@ -28,7 +28,7 @@ class DiffusionCoefficients:
         """Compute the coefficients."""
         # Centered finite difference along longitude
         # Ax, Bx and Cx denote the coefficients associated
-        # to the centred, upwind and downwind point, respectively
+        # to the centered, upwind and downwind point, respectively
         Ax = (cart_grid.dx[1:, 1:-1] - cart_grid.dx[:-1, 1:-1]) / (
             cart_grid.dx[1:, 1:-1] * cart_grid.dx[:-1, 1:-1]
         )
@@ -136,7 +136,6 @@ def compute_laplacian(coeff: DiffusionCoefficients, q: FloatArray2D) -> FloatArr
 def lax_wendroff_update(
     latlon_grid: LatLonGrid,
     cart_grid: CartesianGrid,
-    diffusion: Optional[DiffusionCoefficients],
     dt: FloatT,
     f: FloatArray2D,
     hs: FloatArray2D,
@@ -354,34 +353,36 @@ def lax_wendroff_update(
     unew = hunew / hnew
     vnew = hvnew / hnew
 
-    # --- Add diffusion --- #
-
-    if diffusion:
-        # Extend fluid height
-        hext = np.concatenate((h[-4:-3, :], h, h[3:4, :]), axis=0)
-        hext = np.concatenate((hext[:, 0:1], hext, hext[:, -1:]), axis=1)
-
-        # Add the Laplacian
-        hnew += dt * EARTH_CONSTANTS.nu * compute_laplacian(diffusion, hext)
-
-        # Extend longitudinal velocity
-        uext = np.concatenate((u[-4:-3, :], u, u[3:4, :]), axis=0)
-        uext = np.concatenate((uext[:, 0:1], uext, uext[:, -1:]), axis=1)
-
-        # Add the Laplacian
-        unew += dt * EARTH_CONSTANTS.nu * compute_laplacian(diffusion, uext)
-
-        # Extend fluid height
-        vext = np.concatenate((v[-4:-3, :], v, v[3:4, :]), axis=0)
-        vext = np.concatenate((vext[:, 0:1], vext, vext[:, -1:]), axis=1)
-
-        # Add the Laplacian
-        vnew += dt * EARTH_CONSTANTS.nu * compute_laplacian(diffusion, vext)
-
     return hnew, unew, vnew
 
 
-def _apply_bcs(q: FloatArray2D, qnew: FloatArray2D):
+def compute_diffusion(
+    quantity: FloatArray2D, diffusion: DiffusionCoefficients
+) -> FloatArray2D:
+    """Compute the diffusion term for a quantity.
+
+    Parameters
+    ----------
+    quantity : FloatArray2D
+        Input quantity.
+    diffusion: DiffusionCoefficients
+        Pre-computed diffusion coefficient arrays.
+
+    Returns
+    -------
+    FloatArray2D
+        Laplacian of the quantity on the grid.
+    """
+    q_extended = np.concatenate(
+        (quantity[-4:-3, :], quantity, quantity[3:4, :]), axis=0
+    )
+    q_extended = np.concatenate(
+        (q_extended[:, 0:1], q_extended, q_extended[:, -1:]), axis=1
+    )
+    return compute_laplacian(diffusion, q_extended)
+
+
+def _apply_bcs(q: FloatArray2D, qnew: FloatArray2D) -> FloatArray2D:
     """
     Apply boundary conditions to a quantity.
 
@@ -414,7 +415,7 @@ def solve(
     use_diffusion: bool = True,
     save_data: Optional[Dict[str, Any]] = None,
     print_interval: int = -1,
-):
+) -> Tuple[FloatArray2D, FloatArray2D, FloatArray2D]:
     """
     Numpy implementation of the SWES solver.
 
@@ -532,9 +533,16 @@ def solve(
             time += dt
 
         # --- Update solution --- #
+        # Convection
         hnew, unew, vnew = lax_wendroff_update(
-            latlon_grid, cart_grid, diff_coeff, dt, f, hs, h, u, v
+            latlon_grid, cart_grid, dt, f, hs, h, u, v
         )
+
+        # Diffusion
+        if diff_coeff:
+            hnew += dt * EARTH_CONSTANTS.nu * compute_diffusion(h, diff_coeff)
+            unew += dt * EARTH_CONSTANTS.nu * compute_diffusion(u, diff_coeff)
+            vnew += dt * EARTH_CONSTANTS.nu * compute_diffusion(v, diff_coeff)
 
         # --- Update solution applying BCs --- #
         h = _apply_bcs(h, hnew)
