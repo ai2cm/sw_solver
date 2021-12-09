@@ -12,7 +12,7 @@ import sw_solver
 IC = sw_solver.ICType.RossbyHaurwitzWave
 
 # This many days
-T = 8
+T = 4
 
 # Grid size
 M = 30

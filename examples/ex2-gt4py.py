@@ -8,7 +8,7 @@ import sw_solver
 
 IC = sw_solver.ICType.RossbyHaurwitzWave
 
-T = 8
+T = 4
 
 M = 30
 N = 30

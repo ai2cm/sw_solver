@@ -537,16 +537,18 @@ def solve(
 
     save_interval: int = save_data.get("interval", 0)
 
-    if save_interval > 0:
-        tsave = [0.0]
-        hsave = h_arr[1:-1, :, np.newaxis].copy()
-        usave = u_arr[1:-1, :, np.newaxis].copy()
-        vsave = v_arr[1:-1, :, np.newaxis].copy()
-
     h, u, v = (
-        storage_from_array(np.tile(x, (1, 1, nk_levels)), default_origin=(1, 1, 0))
+        storage_from_array(
+            np.tile(x[:, :, np.newaxis], (1, 1, nk_levels)), default_origin=(1, 1, 0)
+        )
         for x in (h_arr, u_arr, v_arr)
     )
+
+    if save_interval > 0:
+        tsave = [0.0]
+        hsave = h[1:-1, :, 0, np.newaxis].copy()
+        usave = u[1:-1, :, 0, np.newaxis].copy()
+        vsave = v[1:-1, :, 0, np.newaxis].copy()
 
     f = storage_from_array(f_arr, default_origin=(1, 1))
 
@@ -649,9 +651,9 @@ def solve(
 
         if save_interval > 0 and (num_steps % save_interval == 0):
             tsave.append(time)
-            hsave = np.concatenate((hsave, h[1:-1, :, np.newaxis]), axis=2)
-            usave = np.concatenate((usave, u[1:-1, :, np.newaxis]), axis=2)
-            vsave = np.concatenate((vsave, v[1:-1, :, np.newaxis]), axis=2)
+            hsave = np.concatenate((hsave, h[1:-1, :, 0, np.newaxis]), axis=2)
+            usave = np.concatenate((usave, u[1:-1, :, 0, np.newaxis]), axis=2)
+            vsave = np.concatenate((vsave, v[1:-1, :, 0, np.newaxis]), axis=2)
 
     if save_interval > 0:
         tsave = np.asarray(tsave)
