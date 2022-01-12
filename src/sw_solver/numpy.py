@@ -459,8 +459,7 @@ def solve(
     - v : latitudinal fluid velocity
 
     """
-    if save_data is None:
-        save_data = {}
+    save_data = save_data or {}
 
     latlon_grid = LatLonGrid(num_lon_pts, num_lat_pts)
     cart_grid = CartesianGrid(latlon_grid)

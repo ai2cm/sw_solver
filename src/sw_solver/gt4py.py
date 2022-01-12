@@ -233,14 +233,14 @@ def lax_wendroff_definition(
     with computation(PARALLEL), interval(...):
         # Compute grid variables
 
-        # # Latitude-Longitude Grid
+        # Latitude-Longitude Grid
         grid_c = cos(theta)
         grid_tg = tan(theta)
         c_mid_y = cos(0.5 * (theta + theta[0, -1]))
         tg_mid_x = tan(0.5 * (theta[-1, 0] + theta))
         tg_mid_y = tan(0.5 * (theta[0, -1] + theta))
 
-        # # Cartesian Grid
+        # Cartesian Grid
         x = const_a * cos(theta) * phi
         y = const_a * theta
         y1 = const_a * sin(theta)
@@ -388,7 +388,7 @@ def lax_wendroff_definition(
             / (dy1 + dy1[0, 1, 0])
         )
 
-        # # Come back to original variables
+        # Come back to original variables
         u_new = (  # noqa: F841 local variable 'u_new' is assigned to but never used
             hu_new / h_new
         )
@@ -527,6 +527,7 @@ def solve(
 
     # Note: currently just a flat surface
     hs = storage_from_shape(latlon_grid.shape, default_origin=(1, 1))
+    hs[:, :] = 0.0
 
     if not isinstance(ic_type, ICType):
         raise TypeError(
@@ -600,6 +601,13 @@ def solve(
         dtmax = np.minimum(cart_grid.dxmin / eigenx, cart_grid.dymin / eigeny)
         dt = courant * dtmax
 
+        # If needed, adjust timestep not to exceed final time
+        if time + dt > final_time:
+            dt = final_time - time
+            time = final_time
+        else:
+            time += dt
+
         lax_wendroff_update(
             phi,
             theta,
@@ -633,13 +641,6 @@ def solve(
         h = _apply_bcs(h, h_new)
         u = _apply_bcs(u, u_new)
         v = _apply_bcs(v, v_new)
-
-        # If needed, adjust timestep not to exceed final time
-        if time + dt > final_time:
-            dt = final_time - time
-            time = final_time
-        else:
-            time += dt
 
         # --- Print and save --- #
         if print_interval > 0 and (num_steps % print_interval == 0):
