@@ -414,9 +414,11 @@ def _apply_bcs(q, qnew):
         Quantity with boundary conditions applied.
 
     """
-    q[:, 1:-1, :] = np.concatenate((qnew[-2:-1, :, :], qnew, qnew[1:2, :, :]), axis=0)
-    q[:, 0, :] = q[:, 1, :]
-    q[:, -1, :] = q[:, -2, :]
+    q.data[:, 1:-1, :] = np.concatenate(
+        (qnew.data[-2:-1, :, :], qnew.data, qnew.data[1:2, :, :]), axis=0
+    )
+    q.data[:, 0, :] = q.data[:, 1, :]
+    q.data[:, -1, :] = q.data[:, -2, :]
 
     return q
 
