@@ -17,6 +17,7 @@ from gt4py.gtscript import (
     sin,
     tan,
 )
+from gtc.passes.oir_optimizations.horizontal_execution_merging import OnTheFlyMerging
 from gtc.passes.oir_pipeline import DefaultPipeline
 
 from .grid import CartesianGrid, LatLonGrid
@@ -139,7 +140,7 @@ def make_stencil(definition: Callable[..., None], **kwargs: Any) -> gt4py.Stenci
         The resulting stencil.
 
     """
-    kwargs.setdefault("oir_pipeline", DefaultPipeline(skip=DefaultPipeline.all_steps()))
+    kwargs.setdefault("oir_pipeline", DefaultPipeline(skip=[OnTheFlyMerging]))
     kwargs.setdefault("backend", "gtc:numpy")
     kwargs.setdefault("externals", {"USE_DIFFUSION": False})
 
